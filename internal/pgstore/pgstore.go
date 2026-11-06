@@ -83,15 +83,18 @@ func (p *PGStore) UpdateDelivery(ctx context.Context, id string, deliveries int,
 	return err
 }
 
-func (p *PGStore) ListBottles(ctx context.Context, limit int) ([]store.Bottle, error) {
+func (p *PGStore) ListBottles(ctx context.Context, limit, offset int) ([]store.Bottle, error) {
 	if limit <= 0 {
 		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	rows, err := p.pool.Query(ctx, `
 SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
 ORDER BY created_at DESC
-LIMIT $1`, limit)
+LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, err
 	}

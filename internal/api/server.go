@@ -7,6 +7,7 @@ import (
 	"log"
 	"mime"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -209,24 +210,50 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 	if limit > 200 {
 		limit = 200
 	}
-	bottles, err := s.store.ListBottles(c.Context(), limit)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+	offset := 0
+	if raw := c.Query("offset"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			offset = n
+		}
 	}
+	var bottles []store.Bottle
 	if s.pg != nil {
-		pgBottles, err := s.pg.ListBottles(c.Context(), limit)
+		need := limit + offset
+		redisBottles, err := s.store.ListBottles(c.Context(), need, 0)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+		}
+		pgBottles, err := s.pg.ListBottles(c.Context(), need, 0)
 		if err != nil {
 			log.Printf("pg list bottles: %v", err)
+			pgBottles = nil
+		}
+		seen := make(map[string]bool, len(redisBottles)+len(pgBottles))
+		merged := make([]store.Bottle, 0, len(redisBottles)+len(pgBottles))
+		for _, b := range redisBottles {
+			seen[b.ID] = true
+			merged = append(merged, b)
+		}
+		for _, b := range pgBottles {
+			if !seen[b.ID] {
+				merged = append(merged, b)
+			}
+		}
+		sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
+		if offset >= len(merged) {
+			bottles = []store.Bottle{}
 		} else {
-			seen := make(map[string]bool, len(bottles))
-			for _, b := range bottles {
-				seen[b.ID] = true
+			end := offset + limit
+			if end > len(merged) {
+				end = len(merged)
 			}
-			for _, b := range pgBottles {
-				if !seen[b.ID] {
-					bottles = append(bottles, b)
-				}
-			}
+			bottles = merged[offset:end]
+		}
+	} else {
+		var err error
+		bottles, err = s.store.ListBottles(c.Context(), limit, offset)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
 		}
 	}
 	return c.JSON(fiber.Map{"bottles": bottles})

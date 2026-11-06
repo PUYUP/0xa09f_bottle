@@ -39,7 +39,7 @@ Open `http://localhost:8080`.
 - `POST /api/pool/fetch` — `{ "count": 2 }`
 - `GET /api/pool/keys?limit=200` — list blind pool keys without consuming them
 - `POST /api/bottles` — opaque bottle payload/envelopes
-- `GET /api/bottles?limit=50`
+- `GET /api/bottles?limit=50&offset=0` — paginated bottle list (Redis active + Postgres archive merged)
 - `POST /api/bottles/:id/pickup` — `{ "kid": "..." }`
 
 ## Env

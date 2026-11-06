@@ -241,14 +241,17 @@ func (s *Store) CreateBottle(ctx context.Context, bottle Bottle) error {
 	return nil
 }
 
-func (s *Store) ListBottles(ctx context.Context, limit int) ([]Bottle, error) {
+func (s *Store) ListBottles(ctx context.Context, limit, offset int) ([]Bottle, error) {
 	if limit <= 0 {
 		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	cutoff := time.Now().Add(-s.bottleTTL).Unix()
 	_ = s.rdb.ZRemRangeByScore(ctx, activeKey, "-inf", fmt.Sprint(cutoff)).Err()
 
-	ids, err := s.rdb.ZRange(ctx, activeKey, 0, int64(limit-1)).Result()
+	ids, err := s.rdb.ZRevRange(ctx, activeKey, int64(offset), int64(offset+limit-1)).Result()
 	if err != nil {
 		return nil, err
 	}

@@ -18,7 +18,7 @@ let db;
 let keyRecords = [];
 let keyByKid = new Map();
 const BOTTLE_QUOTA = 5;
-const MAX_LOCAL_KEYS = 75;
+const MAX_LOCAL_KEYS = Infinity;
 const caughtThisSession = new Set();
 
 function log(msg, cls = "") {
@@ -168,7 +168,21 @@ async function loadKeys() {
 function renderStatus() {
   const total = keyRecords.length;
   const deposited = keyRecords.filter((k) => k.depositedAt).length;
-  statusEl.textContent = `keys ${total} · deposited ${deposited} · pool cap ${MAX_LOCAL_KEYS} · quota ${BOTTLE_QUOTA} · e2ee`;
+  const capLabel = Number.isFinite(MAX_LOCAL_KEYS) ? String(MAX_LOCAL_KEYS) : "∞";
+  statusEl.innerHTML = "";
+  statusEl.append(
+    document.createTextNode(`keys ${total} · `),
+    (() => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.id = "dep-count";
+      btn.className = "linklike";
+      btn.textContent = `deposited ${deposited}`;
+      btn.title = "click to view your keys";
+      return btn;
+    })(),
+    document.createTextNode(` · pool cap ${capLabel} · quota ${BOTTLE_QUOTA} · e2ee`)
+  );
 }
 
 async function saveKeyRecord(record) {
@@ -216,8 +230,10 @@ async function depositUndeposited() {
     }),
   });
   const now = Date.now();
+  const expiresAt = now + depositTTLSeconds() * 1000;
   for (const k of pending) {
     k.depositedAt = now;
+    k.expiresAt = expiresAt;
     await idbPut(KEY_STORE, k);
   }
   await loadKeys();
@@ -244,7 +260,8 @@ async function generateAndDeposit() {
   await idbPut(KEY_STORE, rec);
   await loadKeys();
   const n = await depositUndeposited();
-  log(`generated key material; deposited ${n} blind public key(s) (${inPool + n}/${MAX_LOCAL_KEYS} in pool)`);
+  const capLabel = Number.isFinite(MAX_LOCAL_KEYS) ? `/${MAX_LOCAL_KEYS}` : "";
+  log(`generated key material; deposited ${n} blind public key(s) (${inPool + n}${capLabel} in pool)`);
 }
 
 async function deriveWrapKey(bottleId, sharedBits, usages) {
@@ -654,6 +671,7 @@ async function vaultKeysPayload() {
       publicJwk: k.publicJwk,
       createdAt: k.createdAt,
       depositedAt: k.depositedAt,
+      expiresAt: k.expiresAt,
     })),
     meta,
   };
@@ -737,6 +755,7 @@ async function importVaultFile(file) {
       publicJwk: k.publicJwk,
       createdAt: k.createdAt || Date.now(),
       depositedAt: k.depositedAt || null,
+      expiresAt: k.expiresAt || null,
     });
   }
   let metaCount = 0;
@@ -759,6 +778,48 @@ function formatExpiry(expiresAt) {
   if (s >= 3600) return `expires in ${Math.floor(s / 3600)}h`;
   if (s >= 60) return `expires in ${Math.floor(s / 60)}m`;
   return `expires in ${s}s`;
+}
+
+async function toggleMyKeysPanel() {
+  const panel = $("my-keys-panel");
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) renderMyKeys();
+}
+
+function renderMyKeys() {
+  $("my-keys-count").textContent = `(${keyRecords.length})`;
+  const list = $("my-keys");
+  list.innerHTML = "";
+  if (!keyRecords.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "no local keys";
+    list.appendChild(empty);
+    return;
+  }
+  for (const k of keyRecords) {
+    const row = document.createElement("div");
+    row.className = "pool-key";
+    const kid = document.createElement("span");
+    kid.className = "kid";
+    kid.textContent = k.kid;
+    kid.title = k.kid;
+    const meta = document.createElement("span");
+    meta.className = "exp";
+    const created = k.createdAt ? new Date(k.createdAt).toLocaleString() : "—";
+    if (k.depositedAt) {
+      const parts = [`deposited ${new Date(k.depositedAt).toLocaleString()}`];
+      if (k.expiresAt) {
+        const remaining = (k.expiresAt - Date.now()) / 1000;
+        parts.push(remaining > 0 ? formatTTL(remaining) : "expired");
+      }
+      meta.textContent = parts.join(" · ");
+    } else {
+      meta.textContent = `pending · created ${created}`;
+    }
+    row.append(kid, meta);
+    list.appendChild(row);
+  }
 }
 
 async function togglePoolPanel() {
@@ -806,6 +867,9 @@ async function init() {
   $("btn-export").addEventListener("click", () => exportVault().catch((e) => log(`export: ${e.message}`, "err")));
   $("btn-import").addEventListener("click", () => $("vault-file").click());
   $("btn-pool").addEventListener("click", () => togglePoolPanel().catch((e) => log(`pool: ${e.message}`, "err")));
+  statusEl.addEventListener("click", (e) => {
+    if (e.target?.id === "dep-count") toggleMyKeysPanel();
+  });
   $("vault-file").addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
     e.target.value = "";
