@@ -288,3 +288,8 @@ h2 {
   color: var(--warn);
   white-space: nowrap;
 }
+
+.st-inpool { color: #4a7c2e; font-weight: 600; }
+.st-used { color: var(--dim); }
+.st-expired { color: var(--bad); }
+.st-pending { color: var(--warn); }

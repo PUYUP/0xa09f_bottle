@@ -7,6 +7,7 @@ import (
 
 	"a09f/bottle/internal/store"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,7 +33,14 @@ type PGStore struct {
 }
 
 func New(ctx context.Context, databaseURL string) (*PGStore, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("pgx config: %w", err)
+	}
+	// Avoid prepared-statement cache races (SQLSTATE 42P05) when multiple
+	// pooled connections prepare the same statement concurrently.
+	cfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("pgx pool: %w", err)
 	}
@@ -68,7 +76,7 @@ ON CONFLICT (id) DO UPDATE SET
   status = EXCLUDED.status,
   delivered_kids = EXCLUDED.delivered_kids`,
 		b.ID, b.CreatedAt, b.Depth, b.ParentID, b.MaxDeliveries, b.Deliveries, b.Status,
-		b.PayloadIV, b.Ciphertext, envelopes, kids)
+		b.PayloadIV, b.Ciphertext, string(envelopes), string(kids))
 	return err
 }
 
@@ -79,7 +87,7 @@ func (p *PGStore) UpdateDelivery(ctx context.Context, id string, deliveries int,
 	}
 	_, err = p.pool.Exec(ctx,
 		`UPDATE bottles SET deliveries = $2, status = $3, delivered_kids = $4 WHERE id = $1`,
-		id, deliveries, status, kids)
+		id, deliveries, status, string(kids))
 	return err
 }
 

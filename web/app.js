@@ -17,8 +17,10 @@ const ttlDescEl = $("key-ttl-desc");
 let db;
 let keyRecords = [];
 let keyByKid = new Map();
+let activePoolKeys = null;
+let ownPoolKids = new Set();
 const BOTTLE_QUOTA = 5;
-const MAX_LOCAL_KEYS = Infinity;
+const MAX_LOCAL_KEYS = 5;
 const caughtThisSession = new Set();
 
 function log(msg, cls = "") {
@@ -163,11 +165,17 @@ async function loadKeys() {
   keyRecords.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   keyByKid = new Map(keyRecords.map((k) => [k.kid, k]));
   renderStatus();
+  await refreshActivePoolKeys();
+}
+
+async function refreshActivePoolKeys() {
+  activePoolKeys = await ownKeysInPool();
+  const el = $("dep-count");
+  if (el) el.textContent = `in pool ${activePoolKeys}`;
 }
 
 function renderStatus() {
   const total = keyRecords.length;
-  const deposited = keyRecords.filter((k) => k.depositedAt).length;
   const capLabel = Number.isFinite(MAX_LOCAL_KEYS) ? String(MAX_LOCAL_KEYS) : "∞";
   statusEl.innerHTML = "";
   statusEl.append(
@@ -177,7 +185,7 @@ function renderStatus() {
       btn.type = "button";
       btn.id = "dep-count";
       btn.className = "linklike";
-      btn.textContent = `deposited ${deposited}`;
+      btn.textContent = `in pool ${activePoolKeys ?? "…"}`;
       btn.title = "click to view your keys";
       return btn;
     })(),
@@ -244,8 +252,10 @@ async function ownKeysInPool() {
   try {
     const { kids = [] } = await api("/api/pool/kids?limit=20000");
     const pool = new Set(kids);
-    return keyRecords.filter((k) => pool.has(k.kid)).length;
+    ownPoolKids = new Set(keyRecords.filter((k) => pool.has(k.kid)).map((k) => k.kid));
+    return ownPoolKids.size;
   } catch {
+    ownPoolKids = new Set();
     return keyRecords.filter((k) => k.depositedAt).length;
   }
 }
@@ -656,6 +666,7 @@ async function checkBottles() {
     }
   }
   await renderInbox();
+  await refreshActivePoolKeys();
   log(`checked ${bottles.length} active bottle(s); caught ${caught}`);
 }
 
@@ -783,7 +794,10 @@ function formatExpiry(expiresAt) {
 async function toggleMyKeysPanel() {
   const panel = $("my-keys-panel");
   panel.hidden = !panel.hidden;
-  if (!panel.hidden) renderMyKeys();
+  if (!panel.hidden) {
+    await refreshActivePoolKeys();
+    renderMyKeys();
+  }
 }
 
 function renderMyKeys() {
@@ -807,15 +821,23 @@ function renderMyKeys() {
     const meta = document.createElement("span");
     meta.className = "exp";
     const created = k.createdAt ? new Date(k.createdAt).toLocaleString() : "—";
-    if (k.depositedAt) {
-      const parts = [`deposited ${new Date(k.depositedAt).toLocaleString()}`];
+    if (!k.depositedAt) {
+      meta.className = "st-pending";
+      meta.textContent = `pending · created ${created}`;
+    } else if (ownPoolKids.has(k.kid)) {
+      meta.className = "st-inpool";
+      const parts = ["in pool"];
       if (k.expiresAt) {
         const remaining = (k.expiresAt - Date.now()) / 1000;
         parts.push(remaining > 0 ? formatTTL(remaining) : "expired");
       }
       meta.textContent = parts.join(" · ");
+    } else if (k.expiresAt && k.expiresAt <= Date.now()) {
+      meta.className = "st-expired";
+      meta.textContent = `expired ${new Date(k.expiresAt).toLocaleString()}`;
     } else {
-      meta.textContent = `pending · created ${created}`;
+      meta.className = "st-used";
+      meta.textContent = `used · deposited ${k.depositedAt ? new Date(k.depositedAt).toLocaleString() : "—"}`;
     }
     row.append(kid, meta);
     list.appendChild(row);
