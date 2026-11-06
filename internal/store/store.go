@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -12,6 +13,7 @@ import (
 
 const (
 	poolKey   = "a09f:blind_pool"
+	kidsKey   = "a09f:blind_pool:kids"
 	activeKey = "a09f:bottles:active"
 )
 
@@ -88,12 +90,101 @@ func bottleRedisKey(id string) string {
 	return "a09f:bottle:" + id
 }
 
+// poolMember is the compact on-Redis representation of a PoolKey.
+// "p" holds the JWK x/y coordinates as "x.y" (base64url), avoiding
+// storing the verbose JWK JSON envelope inside every member.
+type poolMember struct {
+	KID string `json:"k"`
+	PK  string `json:"p"`
+	Exp int64  `json:"e"`
+}
+
+func encodePoolMember(k PoolKey, expiresAt int64) (string, error) {
+	var jwk struct {
+		X string `json:"x"`
+		Y string `json:"y"`
+	}
+	if err := json.Unmarshal([]byte(k.PublicKey), &jwk); err != nil {
+		return "", err
+	}
+	if jwk.X == "" || jwk.Y == "" {
+		return "", errors.New("publicKey missing x/y coordinates")
+	}
+	raw, err := json.Marshal(poolMember{KID: k.KID, PK: jwk.X + "." + jwk.Y, Exp: expiresAt})
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
+func decodePoolMember(raw string) (PoolKey, bool) {
+	var m poolMember
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || m.KID == "" || m.PK == "" {
+		return PoolKey{}, false
+	}
+	parts := strings.SplitN(m.PK, ".", 2)
+	if len(parts) != 2 {
+		return PoolKey{}, false
+	}
+	pub := fmt.Sprintf(`{"kty":"EC","crv":"P-256","x":%q,"y":%q}`, parts[0], parts[1])
+	return PoolKey{KID: m.KID, PublicKey: pub, ExpiresAt: m.Exp}, true
+}
+
+func poolKeyFromMember(raw string) (PoolKey, bool) {
+	if key, ok := decodePoolMember(raw); ok {
+		return key, true
+	}
+	// legacy format: full PoolKey JSON
+	var key PoolKey
+	if err := json.Unmarshal([]byte(raw), &key); err != nil || key.KID == "" {
+		return PoolKey{}, false
+	}
+	return key, true
+}
+
+type depositItem struct {
+	Member string `json:"m"`
+	Score  int64  `json:"s"`
+	KID    string `json:"k"`
+}
+
+var depositKeysScript = redis.NewScript(`
+local items = cjson.decode(ARGV[1])
+local now = tonumber(ARGV[2])
+local maxPool = tonumber(ARGV[3])
+local added = 0
+for i, it in ipairs(items) do
+  if redis.call('ZSCORE', KEYS[2], it.k) == false then
+    redis.call('ZADD', KEYS[1], it.s, it.m)
+    redis.call('ZADD', KEYS[2], it.s, it.k)
+    added = added + 1
+  end
+end
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+if maxPool > 0 then
+  local card = redis.call('ZCARD', KEYS[1])
+  if card > maxPool then
+    local victims = redis.call('ZRANGE', KEYS[1], 0, card - maxPool - 1)
+    for _, m in ipairs(victims) do
+      local ok, obj = pcall(cjson.decode, m)
+      if ok then
+        local kid = obj.k or obj.kid
+        if kid then redis.call('ZREM', KEYS[2], kid) end
+      end
+    end
+    redis.call('ZREM', KEYS[1], unpack(victims))
+  end
+end
+return added
+`)
+
 func (s *Store) DepositKeys(ctx context.Context, keys []PoolKey) error {
 	if len(keys) == 0 {
 		return nil
 	}
 	now := time.Now()
-	pipe := s.rdb.Pipeline()
+	items := make([]depositItem, 0, len(keys))
 	for i := range keys {
 		ttl := s.poolTTL
 		if keys[i].TTLSeconds > 0 {
@@ -101,31 +192,55 @@ func (s *Store) DepositKeys(ctx context.Context, keys []PoolKey) error {
 		}
 		expiresAt := now.Add(ttl).Unix()
 		keys[i].ExpiresAt = expiresAt
-		raw, err := json.Marshal(keys[i])
+		member, err := encodePoolMember(keys[i], expiresAt)
 		if err != nil {
 			return err
 		}
-		pipe.ZAdd(ctx, poolKey, redis.Z{Score: float64(expiresAt), Member: string(raw)})
+		items = append(items, depositItem{Member: member, Score: expiresAt, KID: keys[i].KID})
 	}
-	if _, err := pipe.Exec(ctx); err != nil {
+	raw, err := json.Marshal(items)
+	if err != nil {
 		return err
 	}
-	if s.maxPool > 0 {
-		card, err := s.rdb.ZCard(ctx, poolKey).Result()
-		if err == nil && card > s.maxPool {
-			_ = s.rdb.ZRemRangeByRank(ctx, poolKey, 0, card-s.maxPool-1).Err()
-		}
-	}
-	return nil
+	_, err = depositKeysScript.Run(ctx, s.rdb, []string{poolKey, kidsKey}, string(raw), time.Now().Unix(), s.maxPool).Result()
+	return err
 }
 
 var fetchKeysScript = redis.NewScript(`
 local now = tonumber(ARGV[1])
 local count = tonumber(ARGV[2])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
-local members = redis.call('ZRANGE', KEYS[1], 0, count - 1)
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
+local card = redis.call('ZCARD', KEYS[1])
+if card == 0 then return {} end
+if count > card then count = card end
+local members
+if count >= card then
+  members = redis.call('ZRANGE', KEYS[1], 0, -1)
+else
+  members = {}
+  local used = {}
+  local guard = 0
+  local maxGuard = count * 30 + 100
+  while #members < count and guard < maxGuard do
+    guard = guard + 1
+    local rank = math.random(0, card - 1)
+    if not used[rank] then
+      used[rank] = true
+      local m = redis.call('ZRANGE', KEYS[1], rank, rank)[1]
+      if m then members[#members + 1] = m end
+    end
+  end
+end
 if #members > 0 then
   redis.call('ZREM', KEYS[1], unpack(members))
+  for _, m in ipairs(members) do
+    local ok, obj = pcall(cjson.decode, m)
+    if ok then
+      local kid = obj.k or obj.kid
+      if kid then redis.call('ZREM', KEYS[2], kid) end
+    end
+  end
 end
 return members
 `)
@@ -134,23 +249,71 @@ func (s *Store) FetchKeys(ctx context.Context, count int) ([]PoolKey, error) {
 	if count <= 0 {
 		return nil, nil
 	}
-	raw, err := fetchKeysScript.Run(ctx, s.rdb, []string{poolKey}, time.Now().Unix(), count).StringSlice()
+	raw, err := fetchKeysScript.Run(ctx, s.rdb, []string{poolKey, kidsKey}, time.Now().Unix(), count).StringSlice()
 	if err != nil {
 		return nil, err
 	}
 	keys := make([]PoolKey, 0, len(raw))
 	for _, item := range raw {
-		var key PoolKey
-		if err := json.Unmarshal([]byte(item), &key); err != nil {
-			continue
+		if key, ok := poolKeyFromMember(item); ok {
+			keys = append(keys, key)
 		}
-		keys = append(keys, key)
 	}
 	return keys, nil
 }
 
 func (s *Store) PoolSize(ctx context.Context) (int64, error) {
 	return s.rdb.ZCard(ctx, poolKey).Result()
+}
+
+func (s *Store) StartPoolSweeper(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.sweepPool(ctx)
+			}
+		}
+	}()
+}
+
+func (s *Store) sweepPool(ctx context.Context) {
+	now := time.Now().Unix()
+	max := fmt.Sprint(now)
+	for {
+		members, err := s.rdb.ZRangeByScore(ctx, poolKey, &redis.ZRangeBy{
+			Min: "-", Max: max, Offset: 0, Count: 1000,
+		}).Result()
+		if err != nil || len(members) == 0 {
+			break
+		}
+		kids := make([]string, 0, len(members))
+		for _, m := range members {
+			if key, ok := poolKeyFromMember(m); ok {
+				kids = append(kids, key.KID)
+			}
+		}
+		if len(kids) > 0 {
+			args := make([]interface{}, len(kids))
+			for i, k := range kids {
+				args[i] = k
+			}
+			_ = s.rdb.ZRem(ctx, kidsKey, args...).Err()
+		}
+		args := make([]interface{}, len(members))
+		for i, m := range members {
+			args[i] = m
+		}
+		_ = s.rdb.ZRem(ctx, poolKey, args...).Err()
+	}
+	_ = s.rdb.ZRemRangeByScore(ctx, kidsKey, "-inf", max).Err()
 }
 
 func (s *Store) ListPoolKids(ctx context.Context, limit int) ([]string, int64, error) {
@@ -172,8 +335,8 @@ func (s *Store) ListPoolKids(ctx context.Context, limit int) ([]string, int64, e
 	}
 	kids := make([]string, 0, len(members))
 	for _, item := range members {
-		var key PoolKey
-		if err := json.Unmarshal([]byte(item), &key); err != nil {
+		key, ok := poolKeyFromMember(item)
+		if !ok {
 			continue
 		}
 		if key.ExpiresAt > 0 && key.ExpiresAt <= now {
@@ -202,8 +365,8 @@ func (s *Store) ListPoolKeys(ctx context.Context, limit int) ([]PoolKey, int64, 
 	now := time.Now().Unix()
 	keys := make([]PoolKey, 0, len(members))
 	for _, item := range members {
-		var key PoolKey
-		if err := json.Unmarshal([]byte(item), &key); err != nil {
+		key, ok := poolKeyFromMember(item)
+		if !ok {
 			continue
 		}
 		if key.ExpiresAt > 0 && key.ExpiresAt <= now {

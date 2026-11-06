@@ -68,6 +68,13 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 		if strings.TrimSpace(req.Keys[i].PublicKey) == "" || len(req.Keys[i].PublicKey) > 8192 {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid publicKey")
 		}
+		var jwk struct {
+			X string `json:"x"`
+			Y string `json:"y"`
+		}
+		if err := json.Unmarshal([]byte(req.Keys[i].PublicKey), &jwk); err != nil || jwk.X == "" || jwk.Y == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid publicKey")
+		}
 		if req.Keys[i].TTLSeconds < 0 || req.Keys[i].TTLSeconds > 2592000 || (req.Keys[i].TTLSeconds > 0 && req.Keys[i].TTLSeconds < 60) {
 			return fiber.NewError(fiber.StatusBadRequest, "ttlSeconds must be 0 or 60..2592000")
 		}

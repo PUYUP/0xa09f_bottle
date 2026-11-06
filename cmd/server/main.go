@@ -34,6 +34,7 @@ func main() {
 		log.Fatalf("redis ping: %v", err)
 	}
 	cancel()
+	st.StartPoolSweeper(ctx, time.Minute)
 
 	var pg *pgstore.PGStore
 	if cfg.DatabaseURL != "" {
