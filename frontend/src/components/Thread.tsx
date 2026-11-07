@@ -14,7 +14,7 @@ function MessageNode({ node, sentIds }: { node: ThreadNode; sentIds: Set<string>
   return (
     <div className={`msg bevel-in${isReply ? " reply" : ""}${isSent ? " sent" : ""}`}>
       <div className="mb-1 text-[13px] text-neutral-600">
-        <b>{isReply ? `↳ re: ${(bottle!.parentId || "").slice(0, 8)}` : `🍾 ${(bottle!.id || "").slice(0, 8)}`}</b>
+        <b>{isReply ? `↳ re: ${(bottle!.parentId || "").slice(0, 8)}` : `🎣 ${(bottle!.id || "").slice(0, 8)}`}</b>
         {" · "}
         {claim?.status || "CLAIMED"} · {claim?.deliveries ?? "?"}/{bottle!.maxDeliveries} · depth{" "}
         {depth}/{MAX_THREAD_DEPTH} · key {(kid || "").slice(0, 8)}

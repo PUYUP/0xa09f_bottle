@@ -63,7 +63,7 @@ export default function App() {
           <span className="text-blue-900">🌊</span> saltleak
         </h1>
         <p className="text-xs italic text-neutral-700">
-          anonymous e2ee message-in-a-bottle for engineers — est. 2025
+          anonymous e2ee messages lost in the void — est. 2025
         </p>
         <hr className="retro-hr" />
       </div>
@@ -194,7 +194,7 @@ export default function App() {
       {page === "catch" && (
       <div className="bevel mb-2">
         <div className="retro-titlebar">
-          <span>🎣 catch — {threads.length} line{threads.length === 1 ? "" : "s"}</span>
+          <span>📬 catch — {threads.length} message{threads.length === 1 ? "" : "s"}</span>
           <span className="text-[13px]">only you can read these</span>
         </div>
         <div className="retro-body">
@@ -243,7 +243,7 @@ export default function App() {
                 className="retro-btn"
                 onClick={() => setThreadLimit((n) => n + 10)}
               >
-                load more lines ({threads.length - threadLimit} left)
+                load more messages ({threads.length - threadLimit} left)
               </button>
             </div>
           )}
