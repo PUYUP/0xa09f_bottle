@@ -585,6 +585,12 @@ async function dropBottle(retried = false) {
     env.kid = pk.kid;
     envelopes.push(env);
   }
+  const recipientCount = envelopes.length;
+  const id = await getIdentity();
+  const selfKid = `self:${await deriveUserId(id.publicJwk)}`;
+  const selfEnv = await wrapSessionKey(bottleId, id.publicJwk, rawSessionKey, selfKid);
+  selfEnv.kid = selfKid;
+  envelopes.push(selfEnv);
 
   try {
     await api("/api/bottles", {
@@ -593,7 +599,7 @@ async function dropBottle(retried = false) {
         id: bottleId,
         createdAt: Date.now(),
         depth: 1,
-        maxDeliveries: envelopes.length,
+        maxDeliveries: recipientCount,
         payloadIv: bytesToB64(payloadIV),
         ciphertext: bytesToB64(new Uint8Array(ciphertext)),
         envelopes,
@@ -648,8 +654,13 @@ async function replyBottle(parent, parentPlain, text) {
     enc.encode(encodePlaintext(text, replyJwk))
   );
   const rawSessionKey = await crypto.subtle.exportKey("raw", sessionKey);
-  const env = await wrapSessionKey(bottleId, parentPlain.reply, rawSessionKey, `${REPLY_PREFIX}${parent.id}`);
-  env.kid = `${REPLY_PREFIX}${parent.id}`;
+  const replyKid = `${REPLY_PREFIX}${parent.id}`;
+  const env = await wrapSessionKey(bottleId, parentPlain.reply, rawSessionKey, replyKid);
+  env.kid = replyKid;
+  const id = await getIdentity();
+  const selfKid = `self:${await deriveUserId(id.publicJwk)}`;
+  const selfEnv = await wrapSessionKey(bottleId, id.publicJwk, rawSessionKey, selfKid);
+  selfEnv.kid = selfKid;
   await api("/api/bottles", {
     method: "POST",
     body: JSON.stringify({
@@ -660,7 +671,7 @@ async function replyBottle(parent, parentPlain, text) {
       maxDeliveries: 1,
       payloadIv: bytesToB64(payloadIV),
       ciphertext: bytesToB64(new Uint8Array(ciphertext)),
-      envelopes: [env],
+      envelopes: [env, selfEnv],
     }),
   });
   await storeSentRecord(bottleId, {
@@ -835,9 +846,35 @@ async function checkBottles() {
   let caught = 0;
   let scanned = 0;
   let cursor = 0;
+  // recipient filter: pool kids + self:<userId> + reply:<known bottle ids>.
+  // no known thread records -> unfiltered bootstrap scan.
+  const metas = await idbGetAll(META_STORE).catch(() => []);
+  const knownIds = new Set();
+  for (const r of metas) {
+    if ((typeof r.id === "string" && (r.id.startsWith("caught:") || r.id.startsWith("sent:"))) && r.bottle?.id) {
+      knownIds.add(r.bottle.id);
+    }
+  }
+  let kidsQuery = "";
+  if (knownIds.size > 0) {
+    // only kids still able to receive new bottles (in-pool); consumed/expired
+    // kids can never be targeted again
+    const now = Date.now();
+    const liveKids = ownPoolKids.size > 0
+      ? [...ownPoolKids]
+      : keyRecords.filter((k) => k.depositedAt && (!k.expiresAt || k.expiresAt > now)).map((k) => k.kid);
+    const parts = liveKids;
+    const idt = await getIdentity().catch(() => null);
+    if (idt?.publicJwk) {
+      const uid = await deriveUserId(idt.publicJwk);
+      parts.push(`self:${uid}`);
+      for (const bid of [...knownIds].slice(0, 120)) parts.push(`reply:${bid}`);
+      kidsQuery = `&kids=${encodeURIComponent(parts.join(","))}`;
+    }
+  }
   for (let page = 0; page < 100; page++) {
     const { bottles = [], nextCursor = 0 } = await api(
-      `/api/bottles?limit=100${cursor ? `&cursor=${cursor}` : ""}`,
+      `/api/bottles?limit=100${cursor ? `&cursor=${cursor}` : ""}${kidsQuery}`,
       { auth: false }
     );
     if (!bottles.length) break;
@@ -846,31 +883,42 @@ async function checkBottles() {
     if (caughtThisSession.has(bottle.id)) continue;
     let claimed = false;
     for (const envelope of bottle.envelopes || []) {
-      let record = keyByKid.get(envelope.kid);
-      if (!record && typeof envelope.kid === "string" && envelope.kid.startsWith(REPLY_PREFIX)) {
+      const isSelf = typeof envelope.kid === "string" && envelope.kid.startsWith("self:");
+      let record = isSelf ? null : keyByKid.get(envelope.kid);
+      if (!record && !isSelf && typeof envelope.kid === "string" && envelope.kid.startsWith(REPLY_PREFIX)) {
         const replyRec = await idbGet(META_STORE, envelope.kid).catch(() => null);
         if (replyRec?.privateJwk) record = { privateJwk: replyRec.privateJwk };
+      }
+      if (isSelf) {
+        const idt = await getIdentity().catch(() => null);
+        if (idt?.privateJwk) record = { privateJwk: idt.privateJwk };
       }
       if (!record) continue;
       try {
         const rawSession = await unwrapSessionKey(bottle, envelope, record);
         const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
+        if (isSelf) {
+          // own sent bottle: recover plaintext locally, no pickup claim
+          await idbPut(META_STORE, {
+            id: `sent:${bottle.id}`,
+            bottle,
+            plain,
+            kid: envelope.kid,
+            claim: { status: "SENT" },
+            caughtAt: Date.now(),
+          }).catch(() => {});
+          caughtThisSession.add(bottle.id);
+          caught += 1;
+          claimed = true;
+          log(`recovered sent bottle ${bottle.id.slice(0, 8)}`);
+          break;
+        }
         const { token: pickupToken } = await derivePickupProof(rawSession, bottle.id, envelope.kid);
         let claim = null;
         try {
           claim = await claimBottle(bottle.id, envelope.kid, pickupToken);
         } catch (e) {
-          if (e.message === "invalid_token") {
-            // legacy v1 bottles: proof was not bound to kid
-            const legacy = await derivePickupProof(rawSession, bottle.id);
-            try {
-              claim = await claimBottle(bottle.id, envelope.kid, legacy.token);
-            } catch (e2) {
-              claim = { ok: false, error: e2.message };
-            }
-          } else {
-            claim = { ok: false, error: e.message };
-          }
+          claim = { ok: false, error: e.message };
         }
         await idbPut(META_STORE, {
           id: `caught:${bottle.id}`,
@@ -910,8 +958,13 @@ async function checkBottles() {
 async function vaultKeysPayload() {
   const keys = await idbGetAll(KEY_STORE);
   const meta = await idbGetAll(META_STORE).catch(() => []);
+  // slim vault: private key material only (pool keys + identity + reply keys).
+  // bottle plaintext/thread records are rebuilt from server ciphertext.
+  const keyMeta = meta.filter(
+    (m) => m?.id === "identity" || (typeof m?.id === "string" && m.id.startsWith(REPLY_PREFIX))
+  );
   return {
-    version: 2,
+    version: 3,
     exportedAt: new Date().toISOString(),
     keys: keys.map((k) => ({
       kid: k.kid,
@@ -921,7 +974,7 @@ async function vaultKeysPayload() {
       depositedAt: k.depositedAt,
       expiresAt: k.expiresAt,
     })),
-    meta,
+    meta: keyMeta,
   };
 }
 
@@ -977,15 +1030,16 @@ function downloadJson(filename, data) {
 
 async function exportVault() {
   const payload = await vaultKeysPayload();
-  if (!payload.keys.length) {
+  const hasIdentity = payload.meta.some((m) => m?.id === "identity");
+  if (!payload.keys.length && !hasIdentity) {
     log("no local keys to export", "warn");
     return;
   }
   const passphrase = prompt("vault passphrase");
   if (!passphrase) return;
   const encrypted = await encryptVault(JSON.stringify(payload), passphrase);
-  downloadJson("0xa09f-identity.json", encrypted);
-  log(`exported encrypted vault with ${payload.keys.length} key(s)`);
+  downloadJson("saltleak-identity.json", encrypted);
+  log(`exported encrypted vault with ${payload.keys.length} pool key(s)`);
 }
 
 async function importVaultFile(file) {

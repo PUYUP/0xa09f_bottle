@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
@@ -68,7 +69,10 @@ func validateBottle(b store.Bottle) error {
 	if b.ParentID != "" && (len(b.ParentID) > 128 || !validBottleID(b.ParentID)) {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid parentId")
 	}
-	if len(b.Envelopes) != b.MaxDeliveries {
+	// Envelopes may exceed maxDeliveries by one: clients append a self-addressed
+	// archive envelope (kid "self:...") so sent plaintext stays recoverable.
+	// It never claims a delivery slot, so EXHAUSTED math is unaffected.
+	if len(b.Envelopes) != b.MaxDeliveries && len(b.Envelopes) != b.MaxDeliveries+1 {
 		return fiber.NewError(fiber.StatusBadRequest, "envelope count must equal maxDeliveries")
 	}
 	if b.PayloadIV == "" || len(b.PayloadIV) > 64 || b.Ciphertext == "" || len(b.Ciphertext) > 256*1024 {
@@ -126,7 +130,15 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 		}
 	}
 
+	// Optional recipient filter: only bottles carrying at least one of the
+	// given envelope kids are returned. Used by clients to fetch just their
+	// own bottles instead of the entire corpus.
+	kidSet := parseKidFilter(c.Query("kids"))
+
 	var bottles []store.Bottle
+	if len(kidSet) > 0 {
+		return s.listBottlesByKids(c, limit, beforeCreatedAt, beforeID, kidSet)
+	}
 	if cursorMode {
 		// Scalable Cursor-based pagination (O(log N + limit) index seek)
 		if s.pg != nil {
@@ -217,6 +229,110 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 		nextCursor = fmt.Sprintf("%d_%s", last.CreatedAt, last.ID)
 	}
 	return c.JSON(fiber.Map{"bottles": bottles, "nextCursor": nextCursor})
+}
+
+func parseKidFilter(raw string) map[string]struct{} {
+	if raw == "" {
+		return nil
+	}
+	set := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		kid := strings.TrimSpace(part)
+		if kid == "" || len(kid) > 128 {
+			continue
+		}
+		set[kid] = struct{}{}
+		if len(set) >= 300 {
+			break
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+func bottleMatchesKids(b store.Bottle, kids map[string]struct{}) bool {
+	for _, env := range b.Envelopes {
+		if _, ok := kids[env.KID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchCursorPage merges the Redis fast path and Postgres archive for one
+// cursor-paginated page.
+func (s *Server) fetchCursorPage(ctx context.Context, limit int, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error) {
+	if s.pg != nil {
+		redisBottles, err := s.store.ListBottlesCursor(ctx, limit, beforeCreatedAt, beforeID)
+		if err != nil {
+			return nil, err
+		}
+		pgBottles, err := s.pg.ListBottlesCursor(ctx, limit, beforeCreatedAt, beforeID)
+		if err != nil {
+			log.Printf("pg list bottles: %v", err)
+			pgBottles = nil
+		}
+		seen := make(map[string]bool, len(redisBottles)+len(pgBottles))
+		merged := make([]store.Bottle, 0, len(redisBottles)+len(pgBottles))
+		for _, b := range redisBottles {
+			seen[b.ID] = true
+			merged = append(merged, b)
+		}
+		for _, b := range pgBottles {
+			if !seen[b.ID] {
+				merged = append(merged, b)
+			}
+		}
+		sortBottles(merged)
+		if len(merged) > limit {
+			merged = merged[:limit]
+		}
+		return merged, nil
+	}
+	return s.store.ListBottlesCursor(ctx, limit, beforeCreatedAt, beforeID)
+}
+
+// listBottlesByKids pages through the corpus and returns only bottles whose
+// envelopes carry a requested kid. Pages may return fewer than limit items;
+// nextCursor always points at the last scanned candidate so filtered-out
+// bottles are never skipped.
+func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64, beforeID string, kids map[string]struct{}) error {
+	const pageSize = 200
+	const maxPages = 30
+	out := make([]store.Bottle, 0, limit)
+	curCA, curID := beforeCreatedAt, beforeID
+	nextCursor := ""
+	for page := 0; page < maxPages && len(out) < limit; page++ {
+		candidates, err := s.fetchCursorPage(c.Context(), pageSize, curCA, curID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		exhausted := len(candidates) < pageSize
+		for _, b := range candidates {
+			if bottleMatchesKids(b, kids) {
+				out = append(out, b)
+				if len(out) >= limit {
+					curCA, curID = b.CreatedAt, b.ID
+					nextCursor = fmt.Sprintf("%d_%s", curCA, curID)
+					return c.JSON(fiber.Map{"bottles": out, "nextCursor": nextCursor})
+				}
+			}
+		}
+		last := candidates[len(candidates)-1]
+		curCA, curID = last.CreatedAt, last.ID
+		if exhausted {
+			break
+		}
+	}
+	if len(out) > 0 {
+		nextCursor = fmt.Sprintf("%d_%s", curCA, curID)
+	}
+	return c.JSON(fiber.Map{"bottles": out, "nextCursor": nextCursor})
 }
 
 // sortBottles orders by (createdAt DESC, id DESC) so pagination is stable

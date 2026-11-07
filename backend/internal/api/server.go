@@ -41,7 +41,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{"GET", "POST", "HEAD", "OPTIONS"},
-		AllowHeaders: []string{"Content-Type"},
+		AllowHeaders: []string{"Content-Type", "X-User-Id", "X-Auth-Ts", "X-Auth-Nonce", "X-Auth-Proof"},
 	}))
 
 	depositLimiter := limiter.New(limiter.Config{

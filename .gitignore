@@ -3,3 +3,5 @@ bin/
 .tmp/
 .DS_Store
 .devin/config.local.json
+node_modules/
+dist/
