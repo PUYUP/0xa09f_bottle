@@ -1,0 +1,27 @@
+{
+  "name": "saltleak-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "cap:sync": "npm run build && cap sync"
+  },
+  "dependencies": {
+    "@ionic/core": "^8.4.0",
+    "@ionic/react": "^8.4.0",
+    "ionicons": "^7.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.9.2",
+    "vite": "^5.4.10"
+  }
+}
