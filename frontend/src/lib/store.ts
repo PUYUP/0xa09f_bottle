@@ -530,6 +530,12 @@ export interface ThreadBundle {
   recs: ThreadRecord[];
 }
 
+// Stable ordering: prefer the sender-assigned bottle timestamp so re-fetches
+// (e.g. after vault import) reproduce the same order regardless of catch time.
+function recOrderKey(r: ThreadRecord): number {
+  return r.bottle?.createdAt || r.caughtAt || 0;
+}
+
 export async function buildThreads(): Promise<ThreadBundle> {
   const all = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
   const recs = all
@@ -540,13 +546,13 @@ export async function buildThreads(): Promise<ThreadBundle> {
         r.bottle &&
         r.plain
     )
-    .sort((a, b) => (a.caughtAt || 0) - (b.caughtAt || 0));
+    .sort((a, b) => recOrderKey(a) - recOrderKey(b));
   const byBottle = new Map<string, ThreadRecord>();
   for (const r of recs) {
     const prev = byBottle.get(r.bottle!.id);
     if (!prev || (isSentRecord(prev) && !isSentRecord(r))) byBottle.set(r.bottle!.id, r);
   }
-  const unique = [...byBottle.values()].sort((a, b) => (a.caughtAt || 0) - (b.caughtAt || 0));
+  const unique = [...byBottle.values()].sort((a, b) => recOrderKey(a) - recOrderKey(b));
   const byId = new Map(unique.map((r) => [r.bottle!.id, r]));
   const childrenOf = new Map<string, ThreadRecord[]>();
   const roots: ThreadRecord[] = [];
