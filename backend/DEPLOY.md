@@ -58,15 +58,21 @@ cd backend
 docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
 ```
 
-## Frontend
+## Frontend (Vercel — web.saltleak.com)
 
-Build React dengan API URL production lalu serve statis (Cloudflare Pages gratis,
-atau nginx/Caddy di VPS yang sama):
+React app di-deploy ke Vercel sebagai project terpisah:
 
 ```bash
 cd frontend
 echo "VITE_API_URL=https://relay.saltleak.com" > .env.production
 npm ci && npm run build
+vercel deploy --prod
 ```
 
-Legacy web client tetap tersedia di `https://relay.saltleak.com/` (embedded Go).
+CORS backend sudah `AllowOrigins: *` jadi domain Vercel langsung bisa call API.
+
+Hasil:
+- `https://relay.saltleak.com/` → info page statis (di backend)
+- `https://relay.saltleak.com/legacy/` → web client lama (tidak dihapus)
+- `https://relay.saltleak.com/api/*` → Go backend
+- `https://web.saltleak.com` → React app (Vercel)

@@ -25,22 +25,34 @@ func bindJSON(c fiber.Ctx, v any) error {
 	return json.Unmarshal(c.Body(), v)
 }
 
+// / serves a static info page; the legacy web client lives under /legacy/.
+// The React frontend is deployed separately (e.g. Vercel) and talks to /api/*.
 func (s *Server) serveStatic(c fiber.Ctx) error {
 	if c.Method() != fiber.MethodGet && c.Method() != fiber.MethodHead {
 		return c.Next()
 	}
 	raw := c.Path()
-	if strings.HasPrefix(raw, "/api/") {
-		return c.Next()
+	if raw == "/" {
+		return serveFile(c, "landing.html")
 	}
-	name := strings.TrimPrefix(raw, "/")
+	if raw == "/legacy" {
+		return c.Redirect().To("/legacy/")
+	}
+	if !strings.HasPrefix(raw, "/legacy/") {
+		return c.Status(fiber.StatusNotFound).SendString("not found")
+	}
+	name := strings.TrimPrefix(raw, "/legacy/")
 	if name == "" {
 		name = "index.html"
 	}
 	name = path.Clean(name)
-	if strings.HasPrefix(name, "../") || name == ".." {
+	if strings.HasPrefix(name, "../") || name == ".." || name == "landing.html" {
 		return c.Status(fiber.StatusNotFound).SendString("not found")
 	}
+	return serveFile(c, name)
+}
+
+func serveFile(c fiber.Ctx, name string) error {
 	data, err := fs.ReadFile(web.FS, name)
 	if err != nil {
 		return c.Status(fiber.StatusNotFound).SendString("not found")
