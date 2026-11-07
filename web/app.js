@@ -32,9 +32,14 @@ function log(msg, cls = "") {
 }
 
 async function api(path, options = {}) {
+  const auth = await authHeaders().catch(() => null);
   const res = await fetch(path, {
-    headers: { "content-type": "application/json" },
     ...options,
+    headers: {
+      "content-type": "application/json",
+      ...(auth || {}),
+      ...(options.headers || {}),
+    },
   });
   const text = await res.text();
   let data = null;
@@ -139,6 +144,124 @@ function b64ToBytes(b64) {
   return out;
 }
 
+function b64urlToBytes(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  return b64ToBytes(s);
+}
+
+// ---- passwordless identity & proof-of-possession auth ----
+// A user is an ECDH P-256 identity key stored in IndexedDB meta. Requests
+// carry X-User-Id / X-Auth-Ts / X-Auth-Proof headers; the proof is
+// SHA-256( ECDH(identityPriv, serverPub) || userId || ts ).
+
+const IDENTITY_META_ID = "identity";
+let identityRecord = null;
+let serverPubKey = null;
+let serverPubPromise = null;
+
+async function getIdentity() {
+  if (identityRecord) return identityRecord;
+  identityRecord = (await idbGet(META_STORE, IDENTITY_META_ID).catch(() => null)) || null;
+  if (!identityRecord?.privateJwk) {
+    const pair = await crypto.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" },
+      true,
+      ["deriveBits"]
+    );
+    const privateJwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+    const publicJwk = await crypto.subtle.exportKey("jwk", pair.publicKey);
+    identityRecord = { id: IDENTITY_META_ID, privateJwk, publicJwk };
+    await idbPut(META_STORE, identityRecord).catch(() => {});
+  }
+  return identityRecord;
+}
+
+async function deriveUserId(publicJwk) {
+  const x = b64urlToBytes(publicJwk.x);
+  const y = b64urlToBytes(publicJwk.y);
+  const cat = new Uint8Array(x.length + y.length);
+  cat.set(x);
+  cat.set(y, x.length);
+  const digest = await crypto.subtle.digest("SHA-256", cat);
+  return "u_" + [...new Uint8Array(digest).slice(0, 16)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function getServerPub() {
+  if (serverPubKey) return serverPubKey;
+  serverPubPromise ??= (async () => {
+    // raw fetch: api() itself needs authHeaders -> getServerPub
+    const res = await fetch("/api/auth/server-key");
+    const { publicKey } = await res.json();
+    serverPubKey = await crypto.subtle.importKey(
+      "jwk",
+      JSON.parse(publicKey),
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      []
+    );
+    return serverPubKey;
+  })();
+  return serverPubPromise;
+}
+
+async function computeProof(privateJwk, serverPub, userId) {
+  const priv = await crypto.subtle.importKey(
+    "jwk",
+    privateJwk,
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits({ name: "ECDH", public: serverPub }, priv, 256);
+  const ts = Math.floor(Date.now() / 1000);
+  const enc = new TextEncoder();
+  const uid = enc.encode(userId);
+  const tsBytes = enc.encode(String(ts));
+  const shared = new Uint8Array(bits);
+  const buf = new Uint8Array(shared.length + uid.length + tsBytes.length);
+  buf.set(shared);
+  buf.set(uid, shared.length);
+  buf.set(tsBytes, shared.length + uid.length);
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return { ts, proof: bytesToB64(new Uint8Array(digest)) };
+}
+
+async function authHeaders() {
+  const id = await getIdentity();
+  if (!id.username || !id.userId) return null;
+  const serverPub = await getServerPub();
+  const { ts, proof } = await computeProof(id.privateJwk, serverPub, id.userId);
+  return {
+    "X-User-Id": id.userId,
+    "X-Auth-Ts": String(ts),
+    "X-Auth-Proof": proof,
+  };
+}
+
+async function claimUsername(username) {
+  const id = await getIdentity();
+  const userId = await deriveUserId(id.publicJwk);
+  const serverPub = await getServerPub();
+  const { ts, proof } = await computeProof(id.privateJwk, serverPub, userId);
+  await api("/api/users", {
+    method: "POST",
+    body: JSON.stringify({
+      username,
+      publicKey: JSON.stringify(id.publicJwk),
+      userId,
+      ts,
+      proof,
+    }),
+  });
+  id.username = username;
+  id.userId = userId;
+  await idbPut(META_STORE, id).catch(() => {});
+  identityRecord = id;
+}
+
 function randBytes(n) {
   return crypto.getRandomValues(new Uint8Array(n));
 }
@@ -189,7 +312,11 @@ function renderStatus() {
       btn.title = "click to view your keys";
       return btn;
     })(),
-    document.createTextNode(` · pool cap ${capLabel} · quota ${BOTTLE_QUOTA} · e2ee`)
+    document.createTextNode(
+      ` · pool cap ${capLabel} · quota ${BOTTLE_QUOTA} · e2ee · ${
+        identityRecord?.username ? `@${identityRecord.username}` : "anon"
+      }`
+    )
   );
 }
 
@@ -647,9 +774,16 @@ async function renderInbox() {
 }
 
 async function checkBottles() {
-  const { bottles = [] } = await api("/api/bottles?limit=100");
   let caught = 0;
-  for (const bottle of bottles) {
+  let scanned = 0;
+  let cursor = 0;
+  for (let page = 0; page < 100; page++) {
+    const { bottles = [], nextCursor = 0 } = await api(
+      `/api/bottles?limit=100${cursor ? `&cursor=${cursor}` : ""}`
+    );
+    if (!bottles.length) break;
+    scanned += bottles.length;
+    for (const bottle of bottles) {
     if (caughtThisSession.has(bottle.id)) continue;
     let claimed = false;
     for (const envelope of bottle.envelopes || []) {
@@ -694,10 +828,13 @@ async function checkBottles() {
     if (!claimed) {
       // no local key matched; ignore
     }
+    }
+    if (!nextCursor || nextCursor === cursor) break;
+    cursor = nextCursor;
   }
   await renderInbox();
   await refreshActivePoolKeys();
-  log(`checked ${bottles.length} active bottle(s); caught ${caught}`);
+  log(`checked ${scanned} bottle(s); caught ${caught}`);
 }
 
 async function vaultKeysPayload() {
@@ -805,8 +942,11 @@ async function importVaultFile(file) {
     await idbPut(META_STORE, m);
     metaCount += 1;
   }
+  identityRecord = null;
+  identityRecord = await getIdentity().catch(() => null);
   await loadKeys();
   await renderInbox();
+  renderStatus();
   log(`imported vault with ${payload.keys.length} key(s), ${metaCount} thread record(s)`);
 }
 
@@ -907,8 +1047,138 @@ async function refreshPoolKeys() {
   }
 }
 
+// ---- account panel: identity, block, report ----
+
+const accountPanelEl = () => $("account-panel");
+
+async function toggleAccountPanel() {
+  const panel = accountPanelEl();
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) await renderAccount();
+}
+
+async function resolveUserTarget(input) {
+  const v = input.trim();
+  if (!v) return null;
+  if (v.startsWith("u_")) return v;
+  const { user } = await api(`/api/users/by-username/${encodeURIComponent(v)}`);
+  return user?.id || null;
+}
+
+async function renderAccount() {
+  const info = $("account-info");
+  const blocksEl = $("blocks-list");
+  const id = await getIdentity();
+  if (id.username) {
+    info.textContent = `@${id.username} · ${id.userId}`;
+    info.title = id.userId;
+  } else {
+    info.textContent = "anonymous — claim a username to enable block/report";
+  }
+  blocksEl.innerHTML = "";
+  if (!id.username) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "no account";
+    blocksEl.appendChild(empty);
+    return;
+  }
+  try {
+    const { blocks = [] } = await api("/api/me/blocks");
+    if (!blocks.length) {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "not blocking anyone";
+      blocksEl.appendChild(empty);
+      return;
+    }
+    for (const b of blocks) {
+      const row = document.createElement("div");
+      row.className = "pool-key";
+      const name = document.createElement("span");
+      name.className = "kid";
+      name.textContent = `@${b.username}`;
+      name.title = `${b.blockedUserId}${b.reason ? ` · ${b.reason}` : ""}`;
+      const btn = document.createElement("button");
+      btn.className = "btn small";
+      btn.textContent = "[ unblock ]";
+      btn.addEventListener("click", async () => {
+        try {
+          await api(`/api/users/${encodeURIComponent(b.blockedUserId)}/block`, { method: "DELETE" });
+          log(`unblocked @${b.username}`);
+          await renderAccount();
+        } catch (e) {
+          log(`unblock: ${e.message}`, "err");
+        }
+      });
+      row.append(name, btn);
+      blocksEl.appendChild(row);
+    }
+  } catch (e) {
+    const err = document.createElement("div");
+    err.className = "empty";
+    err.textContent = `blocks unavailable: ${e.message}`;
+    blocksEl.appendChild(err);
+  }
+}
+
+async function claimUsernameFromUI() {
+  const input = $("username-input");
+  const username = input.value.trim();
+  if (!username) {
+    log("enter a username first", "warn");
+    return;
+  }
+  try {
+    await claimUsername(username);
+    input.value = "";
+    log(`claimed @${username}`);
+    renderStatus();
+    await renderAccount();
+  } catch (e) {
+    log(`claim: ${e.message}`, "err");
+  }
+}
+
+async function blockOrReport(kind) {
+  const id = await getIdentity();
+  if (!id.username) {
+    log("claim a username first", "warn");
+    return;
+  }
+  const target = await resolveUserTarget($("block-target"));
+  if (!target) {
+    log("user not found", "warn");
+    return;
+  }
+  if (target === id.userId) {
+    log("that is you", "warn");
+    return;
+  }
+  try {
+    if (kind === "block") {
+      await api(`/api/users/${encodeURIComponent(target)}/block`, {
+        method: "POST",
+        body: JSON.stringify({ reason: "blocked via web" }),
+      });
+      log(`blocked ${target.slice(0, 12)}… — their keys won't receive your bottles`);
+    } else {
+      const reason = prompt("report reason (optional)") || "";
+      await api(`/api/users/${encodeURIComponent(target)}/report`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      });
+      log(`reported ${target.slice(0, 12)}…`);
+    }
+    await renderAccount();
+  } catch (e) {
+    log(`${kind}: ${e.message}`, "err");
+  }
+}
+
 async function init() {
   db = await openDB();
+  identityRecord = await getIdentity().catch(() => null);
   await loadKeys();
   await renderInbox();
   updateTTLDesc();
@@ -919,6 +1189,10 @@ async function init() {
   $("btn-export").addEventListener("click", () => exportVault().catch((e) => log(`export: ${e.message}`, "err")));
   $("btn-import").addEventListener("click", () => $("vault-file").click());
   $("btn-pool").addEventListener("click", () => togglePoolPanel().catch((e) => log(`pool: ${e.message}`, "err")));
+  $("btn-account").addEventListener("click", () => toggleAccountPanel().catch((e) => log(`account: ${e.message}`, "err")));
+  $("btn-claim").addEventListener("click", () => claimUsernameFromUI().catch((e) => log(`claim: ${e.message}`, "err")));
+  $("btn-block").addEventListener("click", () => blockOrReport("block").catch((e) => log(`block: ${e.message}`, "err")));
+  $("btn-report").addEventListener("click", () => blockOrReport("report").catch((e) => log(`report: ${e.message}`, "err")));
   statusEl.addEventListener("click", (e) => {
     if (e.target?.id === "dep-count") toggleMyKeysPanel();
   });

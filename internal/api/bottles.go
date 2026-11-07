@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -94,22 +95,31 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 		limit = 200
 	}
 
-	var cursor int64
-	if raw := c.Query("cursor"); raw != "" {
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
-			cursor = n
+	cursorRaw := c.Query("cursor")
+	cursorMode := cursorRaw != ""
+	var beforeCreatedAt int64
+	var beforeID string
+	if cursorMode {
+		// Composite cursor "<createdAt>_<id>"; a bare number is accepted as
+		// a legacy timestamp-only cursor.
+		if idx := strings.LastIndex(cursorRaw, "_"); idx > 0 {
+			if n, err := strconv.ParseInt(cursorRaw[:idx], 10, 64); err == nil && n > 0 && validBottleID(cursorRaw[idx+1:]) {
+				beforeCreatedAt, beforeID = n, cursorRaw[idx+1:]
+			}
+		} else if n, err := strconv.ParseInt(cursorRaw, 10, 64); err == nil && n > 0 {
+			beforeCreatedAt = n
 		}
 	}
 
 	var bottles []store.Bottle
-	if cursor > 0 {
+	if cursorMode {
 		// Scalable Cursor-based pagination (O(log N + limit) index seek)
 		if s.pg != nil {
-			redisBottles, err := s.store.ListBottlesCursor(c.Context(), limit, cursor)
+			redisBottles, err := s.store.ListBottlesCursor(c.Context(), limit, beforeCreatedAt, beforeID)
 			if err != nil {
 				return fiber.NewError(fiber.StatusInternalServerError, "list failed")
 			}
-			pgBottles, err := s.pg.ListBottlesCursor(c.Context(), limit, cursor)
+			pgBottles, err := s.pg.ListBottlesCursor(c.Context(), limit, beforeCreatedAt, beforeID)
 			if err != nil {
 				log.Printf("pg list bottles: %v", err)
 				pgBottles = nil
@@ -125,14 +135,14 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 					merged = append(merged, b)
 				}
 			}
-			sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
+			sortBottles(merged)
 			if len(merged) > limit {
 				merged = merged[:limit]
 			}
 			bottles = merged
 		} else {
 			var err error
-			bottles, err = s.store.ListBottlesCursor(c.Context(), limit, cursor)
+			bottles, err = s.store.ListBottlesCursor(c.Context(), limit, beforeCreatedAt, beforeID)
 			if err != nil {
 				return fiber.NewError(fiber.StatusInternalServerError, "list failed")
 			}
@@ -167,7 +177,7 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 					merged = append(merged, b)
 				}
 			}
-			sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
+			sortBottles(merged)
 			if offset >= len(merged) {
 				bottles = []store.Bottle{}
 			} else {
@@ -186,11 +196,23 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 		}
 	}
 
-	var nextCursor int64
+	var nextCursor string
 	if len(bottles) > 0 {
-		nextCursor = bottles[len(bottles)-1].CreatedAt
+		last := bottles[len(bottles)-1]
+		nextCursor = fmt.Sprintf("%d_%s", last.CreatedAt, last.ID)
 	}
 	return c.JSON(fiber.Map{"bottles": bottles, "nextCursor": nextCursor})
+}
+
+// sortBottles orders by (createdAt DESC, id DESC) so pagination is stable
+// even when several bottles share the same second-resolution timestamp.
+func sortBottles(b []store.Bottle) {
+	sort.Slice(b, func(i, j int) bool {
+		if b[i].CreatedAt != b[j].CreatedAt {
+			return b[i].CreatedAt > b[j].CreatedAt
+		}
+		return b[i].ID > b[j].ID
+	})
 }
 
 type pickupRequest struct {
@@ -230,4 +252,3 @@ func (s *Server) pickupBottle(c fiber.Ctx) error {
 	}
 	return c.JSON(result)
 }
-

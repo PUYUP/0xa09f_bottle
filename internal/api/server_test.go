@@ -82,4 +82,3 @@ func TestValidateBottle(t *testing.T) {
 		t.Errorf("expected error for envelope count mismatch")
 	}
 }
-

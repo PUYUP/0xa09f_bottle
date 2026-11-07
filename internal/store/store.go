@@ -8,13 +8,16 @@ import (
 	"strings"
 	"time"
 
+	"a09f/bottle/internal/keyauth"
+
 	"github.com/redis/go-redis/v9"
 )
 
 const (
-	poolKey   = "a09f:blind_pool"
-	kidsKey   = "a09f:blind_pool:kids"
-	activeKey = "a09f:bottles:active"
+	poolKey         = "a09f:blind_pool"
+	kidsKey         = "a09f:blind_pool:kids"
+	activeKey       = "a09f:bottles:active"
+	authIdentityKey = "a09f:auth:identity"
 )
 
 var ErrBottleExists = errors.New("bottle already exists")
@@ -211,47 +214,73 @@ func (s *Store) DepositKeys(ctx context.Context, keys []PoolKey) error {
 var fetchKeysScript = redis.NewScript(`
 local now = tonumber(ARGV[1])
 local count = tonumber(ARGV[2])
+local exclude = {}
+if ARGV[3] and ARGV[3] ~= '' then
+  local ok, arr = pcall(cjson.decode, ARGV[3])
+  if ok and type(arr) == 'table' then
+    for _, k in ipairs(arr) do exclude[tostring(k)] = true end
+  end
+end
+local function kidOf(m)
+  local ok, obj = pcall(cjson.decode, m)
+  if ok then return obj.k or obj.kid end
+  return nil
+end
+local function excluded(m)
+  local kid = kidOf(m)
+  return kid ~= nil and exclude[kid] == true
+end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
 local card = redis.call('ZCARD', KEYS[1])
 if card == 0 then return {} end
 if count > card then count = card end
-local members
+local members = {}
 if count >= card then
-  members = redis.call('ZRANGE', KEYS[1], 0, -1)
+  local all = redis.call('ZRANGE', KEYS[1], 0, -1)
+  for _, m in ipairs(all) do
+    if not excluded(m) then members[#members + 1] = m end
+  end
 else
-  members = {}
   local used = {}
   local guard = 0
-  local maxGuard = count * 30 + 100
+  local maxGuard = count * 50 + 200
   while #members < count and guard < maxGuard do
     guard = guard + 1
     local rank = math.random(0, card - 1)
     if not used[rank] then
       used[rank] = true
       local m = redis.call('ZRANGE', KEYS[1], rank, rank)[1]
-      if m then members[#members + 1] = m end
+      if m and not excluded(m) then members[#members + 1] = m end
     end
   end
 end
 if #members > 0 then
   redis.call('ZREM', KEYS[1], unpack(members))
   for _, m in ipairs(members) do
-    local ok, obj = pcall(cjson.decode, m)
-    if ok then
-      local kid = obj.k or obj.kid
-      if kid then redis.call('ZREM', KEYS[2], kid) end
-    end
+    local kid = kidOf(m)
+    if kid then redis.call('ZREM', KEYS[2], kid) end
   end
 end
 return members
 `)
 
-func (s *Store) FetchKeys(ctx context.Context, count int) ([]PoolKey, error) {
+// FetchKeys atomically removes and returns up to count random pool keys.
+// exclude lists kid values that must not be handed out (e.g. keys owned by
+// users blocked by the requester); excluded members stay in the pool.
+func (s *Store) FetchKeys(ctx context.Context, count int, exclude []string) ([]PoolKey, error) {
 	if count <= 0 {
 		return nil, nil
 	}
-	raw, err := fetchKeysScript.Run(ctx, s.rdb, []string{poolKey, kidsKey}, time.Now().Unix(), count).StringSlice()
+	var excludeJSON string
+	if len(exclude) > 0 {
+		raw, err := json.Marshal(exclude)
+		if err != nil {
+			return nil, err
+		}
+		excludeJSON = string(raw)
+	}
+	raw, err := fetchKeysScript.Run(ctx, s.rdb, []string{poolKey, kidsKey}, time.Now().Unix(), count, excludeJSON).StringSlice()
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +295,49 @@ func (s *Store) FetchKeys(ctx context.Context, count int) ([]PoolKey, error) {
 
 func (s *Store) PoolSize(ctx context.Context) (int64, error) {
 	return s.rdb.ZCard(ctx, poolKey).Result()
+}
+
+// AuthIdentity is the server's static ECDH keypair used to verify
+// proof-of-possession auth proofs. It is generated once and persisted in
+// Redis so proofs survive restarts.
+type AuthIdentity struct {
+	PrivateJWK string `json:"privateJwk"`
+	PublicJWK  string `json:"publicJwk"`
+}
+
+func (s *Store) AuthIdentity(ctx context.Context) (AuthIdentity, error) {
+	raw, err := s.rdb.Get(ctx, authIdentityKey).Result()
+	if err == nil && raw != "" {
+		var id AuthIdentity
+		if json.Unmarshal([]byte(raw), &id) == nil && id.PrivateJWK != "" {
+			return id, nil
+		}
+	}
+	priv, pub, err := keyauth.GenerateIdentity()
+	if err != nil {
+		return AuthIdentity{}, err
+	}
+	payload, err := json.Marshal(AuthIdentity{PrivateJWK: priv, PublicJWK: pub})
+	if err != nil {
+		return AuthIdentity{}, err
+	}
+	ok, err := s.rdb.SetNX(ctx, authIdentityKey, payload, 0).Result()
+	if err != nil {
+		return AuthIdentity{}, err
+	}
+	if !ok {
+		// Another replica won the race; read its identity.
+		raw, err = s.rdb.Get(ctx, authIdentityKey).Result()
+		if err != nil {
+			return AuthIdentity{}, err
+		}
+		var id AuthIdentity
+		if err := json.Unmarshal([]byte(raw), &id); err != nil {
+			return AuthIdentity{}, err
+		}
+		return id, nil
+	}
+	return AuthIdentity{PrivateJWK: priv, PublicJWK: pub}, nil
 }
 
 func (s *Store) StartPoolSweeper(ctx context.Context, interval time.Duration) {
@@ -494,25 +566,64 @@ func (s *Store) ListBottles(ctx context.Context, limit, offset int) ([]Bottle, e
 	return bottles, nil
 }
 
-func (s *Store) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64) ([]Bottle, error) {
+// ListBottlesCursor returns up to limit ACTIVE bottles ordered by
+// (createdAt DESC, id DESC), strictly older than the (beforeCreatedAt,
+// beforeID) boundary. A composite cursor is required for correctness when
+// multiple bottles share the same second-resolution createdAt; an empty
+// beforeID keeps legacy timestamp-only semantics.
+func (s *Store) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64, beforeID string) ([]Bottle, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	cutoff := time.Now().Add(-s.bottleTTL).Unix()
 	_ = s.rdb.ZRemRangeByScore(ctx, activeKey, "-inf", fmt.Sprint(cutoff)).Err()
 
-	maxScore := "+inf"
+	var ids []string
 	if beforeCreatedAt > 0 {
-		maxScore = fmt.Sprintf("(%d", beforeCreatedAt)
+		if beforeID != "" {
+			// Same-score band: members sort lexicographically (DESC under
+			// ZREVRANGEBYSCORE), so the continuation is the suffix with
+			// member < beforeID.
+			band, err := s.rdb.ZRevRangeByScore(ctx, activeKey, &redis.ZRangeBy{
+				Min: fmt.Sprint(beforeCreatedAt),
+				Max: fmt.Sprint(beforeCreatedAt),
+			}).Result()
+			if err != nil {
+				return nil, err
+			}
+			for _, id := range band {
+				if id < beforeID {
+					ids = append(ids, id)
+				}
+				if len(ids) >= limit {
+					break
+				}
+			}
+		}
+		if len(ids) < limit {
+			rest, err := s.rdb.ZRevRangeByScore(ctx, activeKey, &redis.ZRangeBy{
+				Max:   fmt.Sprintf("(%d", beforeCreatedAt),
+				Min:   "-inf",
+				Count: int64(limit - len(ids)),
+			}).Result()
+			if err != nil {
+				return nil, err
+			}
+			ids = append(ids, rest...)
+		}
+	} else {
+		var err error
+		ids, err = s.rdb.ZRevRangeByScore(ctx, activeKey, &redis.ZRangeBy{
+			Max:   "+inf",
+			Min:   "-inf",
+			Count: int64(limit),
+		}).Result()
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	ids, err := s.rdb.ZRevRangeByScore(ctx, activeKey, &redis.ZRangeBy{
-		Max:   maxScore,
-		Min:   "-inf",
-		Count: int64(limit),
-	}).Result()
-	if err != nil {
-		return nil, err
+	if len(ids) == 0 {
+		return []Bottle{}, nil
 	}
 	if len(ids) == 0 {
 		return []Bottle{}, nil

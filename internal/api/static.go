@@ -53,4 +53,3 @@ func (s *Server) serveStatic(c fiber.Ctx) error {
 	c.Set("Cache-Control", "no-store")
 	return c.Send(data)
 }
-

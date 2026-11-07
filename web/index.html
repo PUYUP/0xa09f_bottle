@@ -23,6 +23,7 @@
       <button id="btn-export" class="btn">[ export vault ]</button>
       <button id="btn-import" class="btn">[ import vault ]</button>
       <button id="btn-pool" class="btn">[ pool keys ]</button>
+      <button id="btn-account" class="btn">[ account ]</button>
       <input id="vault-file" type="file" accept=".json,application/json" hidden />
       <div class="ttl-control">
         <label for="key-ttl">blind key ttl (seconds)</label>
@@ -39,6 +40,22 @@
     <section id="my-keys-panel" class="panel pool-panel" hidden>
       <h2>my keys <span id="my-keys-count" class="pool-count"></span></h2>
       <div id="my-keys" class="pool-keys"><div class="empty">no local keys</div></div>
+    </section>
+
+    <section id="account-panel" class="panel pool-panel" hidden>
+      <h2>account</h2>
+      <div id="account-info" class="account-info">…</div>
+      <div class="account-row">
+        <input id="username-input" class="ttl-input" type="text" maxlength="32" placeholder="username" />
+        <button id="btn-claim" class="btn">[ claim username ]</button>
+      </div>
+      <div class="account-row">
+        <input id="block-target" class="ttl-input" type="text" maxlength="64" placeholder="username or user id" />
+        <button id="btn-block" class="btn">[ block ]</button>
+        <button id="btn-report" class="btn">[ report ]</button>
+      </div>
+      <div class="account-sub">blocked users — their keys never receive your bottles</div>
+      <div id="blocks-list" class="pool-keys"><div class="empty">no account</div></div>
     </section>
 
     <section class="panel compose">

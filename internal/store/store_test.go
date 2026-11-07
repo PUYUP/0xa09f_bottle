@@ -39,4 +39,3 @@ func TestPoolKeyFromMemberLegacy(t *testing.T) {
 		t.Errorf("expected KID legacy-kid, got %s", key.KID)
 	}
 }
-

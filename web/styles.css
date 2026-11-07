@@ -293,3 +293,36 @@ h2 {
 .st-used { color: var(--dim); }
 .st-expired { color: var(--bad); }
 .st-pending { color: var(--warn); }
+
+.account-info {
+  font-family: Georgia, serif;
+  font-size: 15px;
+  color: var(--fg);
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+
+.account-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.account-row .ttl-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-sub {
+  font-size: 11px;
+  color: var(--dim);
+  margin: 4px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.btn.small {
+  padding: 3px 10px;
+  font-size: 11px;
+}

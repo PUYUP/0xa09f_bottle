@@ -1,9 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"strconv"
 	"strings"
+	"time"
 
 	"a09f/bottle/internal/store"
 
@@ -44,6 +47,16 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 	if err := s.store.DepositKeys(c.Context(), req.Keys); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "deposit failed")
 	}
+	if user, ok := s.authUser(c); ok {
+		keys := append([]store.PoolKey(nil), req.Keys...)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.pg.UpsertUserKeys(ctx, user.ID, keys); err != nil {
+				log.Printf("pg user_keys %s: %v", user.ID, err)
+			}
+		}()
+	}
 	return c.JSON(fiber.Map{"accepted": len(req.Keys)})
 }
 
@@ -64,7 +77,15 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 	if req.Count > 5 {
 		req.Count = 5
 	}
-	keys, err := s.store.FetchKeys(c.Context(), req.Count)
+	var exclude []string
+	if user, ok := s.authUser(c); ok {
+		if kids, err := s.pg.ListBlockedKids(c.Context(), user.ID, 10000); err == nil {
+			exclude = kids
+		} else {
+			log.Printf("pg blocked kids %s: %v", user.ID, err)
+		}
+	}
+	keys, err := s.store.FetchKeys(c.Context(), req.Count, exclude)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "fetch failed")
 	}
@@ -98,4 +119,3 @@ func (s *Server) listPoolKids(c fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"kids": kids, "size": size})
 }
-

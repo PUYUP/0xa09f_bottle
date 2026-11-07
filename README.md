@@ -40,7 +40,47 @@ Open `http://localhost:8080`.
 - `GET /api/pool/keys?limit=200` — list blind pool keys without consuming them
 - `POST /api/bottles` — opaque bottle payload/envelopes
 - `GET /api/bottles?limit=50&offset=0` — paginated bottle list (Redis active + Postgres archive merged)
-- `POST /api/bottles/:id/pickup` — `{ "kid": "..." }`
+- `POST /api/bottles/:id/pickup` — `{ "kid": "...", "pickupToken": "..." }`
+- `GET /api/bottles?limit=50&cursor=<createdAt>_<id>` — cursor-paginated bottle list (Redis active + Postgres archive merged, ordered `createdAt DESC, id DESC`); `offset` still works for backward compatibility. Response includes `nextCursor`.
+- `GET /api/pool/kids?limit=20000` — lightweight list of pool key ids + pool size
+
+## Users, block & report (passwordless)
+
+There are **no passwords, logins, or sessions**. A user is an ECDH P-256
+identity key; `user.id` is derived deterministically from the public key
+(`u_` + first 16 bytes of `SHA-256(x || y)`, hex), so the same key always maps
+to the same user.
+
+**Proof-of-possession** — every authenticated request carries headers:
+
+```
+X-User-Id:    <user id>
+X-Auth-Ts:    <unix seconds>
+X-Auth-Proof: base64( SHA-256( ecdhShared || utf8(userId) || utf8(str(ts)) ) )
+```
+
+`ecdhShared` = `ECDH(userPrivateKey, serverPublicKey)` (32 bytes). The server
+recomputes `ECDH(serverPrivateKey, userPublicKey)` and compares hashes in
+constant time; timestamps older/newer than ±300s are rejected. The server's
+static public key is public: `GET /api/auth/server-key`.
+
+Endpoints:
+
+- `POST /api/users` — `{ "username", "publicKey", "userId", "ts", "proof" }` → registers/claims a username for an identity key (proof verified against the submitted key; re-registering the same key is idempotent)
+- `GET /api/me` — auth headers → own profile
+- `GET /api/users/:id` — public profile `{id, username}`
+- `POST /api/users/:id/block` `{ "reason"? }` — auth headers; blocked users' pool keys are **excluded from your `/api/pool/fetch` results** so their keys never receive your bottles
+- `DELETE /api/users/:id/block` — remove a block
+- `GET /api/me/blocks` — list blocked users
+- `POST /api/users/:id/report` `{ "reason" }` — file a report for moderation
+- `POST /api/pool/deposit` — send the same auth headers to attribute deposited kids to your account (`user_keys` table); anonymous deposits still work
+- `POST /api/pool/fetch` — auth headers enable block enforcement; anonymous fetch works but ignores blocks
+
+Postgres tables (auto-migrated): `users` (id + username only — a user may own
+many keys), `user_identities` (the single proof-of-possession key per user),
+`user_keys` (every pool kid attributed to a user), `blocked_users`,
+`reported_users`. Block/report require `DATABASE_URL`; without it those
+endpoints return 503 and fetch/deposit simply skip attribution.
 
 ## Env
 
@@ -55,5 +95,5 @@ See `.env.example`.
 
 ## Notes
 
-- Redis is the primary datastore for this MVP. PostgreSQL can be added later for long-term audit/delivery metadata.
+- Redis is authoritative for the ephemeral blind pool and active bottles; PostgreSQL archives bottles and stores users/block/report data. Pool keys themselves are never persisted to Postgres.
 - The pickup endpoint trusts that a client successfully decrypted before claiming; this is inherent to a blind E2EE relay without a server-visible proof of plaintext.

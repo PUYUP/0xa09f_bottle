@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/ecdh"
+	"sync"
 	"time"
 
 	"a09f/bottle/internal/config"
@@ -19,6 +21,10 @@ type Server struct {
 	cfg   config.Config
 	store *store.Store
 	pg    *pgstore.PGStore
+
+	authOnce sync.Once
+	authPriv *ecdh.PrivateKey
+	authErr  error
 }
 
 func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
@@ -60,6 +66,14 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 		},
 	})
 
+	userLimiter := limiter.New(limiter.Config{
+		Max:        30,
+		Expiration: 1 * time.Minute,
+		LimitReached: func(c fiber.Ctx) error {
+			return fiber.NewError(fiber.StatusTooManyRequests, "user rate limit exceeded")
+		},
+	})
+
 	app.Get("/api/health", s.health)
 	app.Get("/api/health/live", s.live)
 	app.Get("/api/health/ready", s.ready)
@@ -70,6 +84,15 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Post("/api/bottles", bottleLimiter, s.createBottle)
 	app.Get("/api/bottles", s.listBottles)
 	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
+	app.Get("/api/auth/server-key", s.serverKey)
+	app.Post("/api/users", userLimiter, s.registerUser)
+	app.Get("/api/me", s.me)
+	app.Get("/api/users/by-username/:username", s.getUserByUsername)
+	app.Get("/api/users/:id", s.getUser)
+	app.Post("/api/users/:id/block", userLimiter, s.blockUser)
+	app.Delete("/api/users/:id/block", userLimiter, s.unblockUser)
+	app.Get("/api/me/blocks", s.listBlocks)
+	app.Post("/api/users/:id/report", userLimiter, s.reportUser)
 
 	app.Use(s.serveStatic)
 	return app

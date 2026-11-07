@@ -26,6 +26,51 @@ CREATE TABLE IF NOT EXISTS bottles (
   delivered_kids  JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 CREATE INDEX IF NOT EXISTS bottles_created_at_idx ON bottles (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS users (
+  id          TEXT PRIMARY KEY,
+  username    TEXT NOT NULL,
+  created_at  BIGINT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username));
+
+-- users may own many public keys (pool kids live in user_keys); the single
+-- identity key used for proof-of-possession auth lives here.
+ALTER TABLE users DROP COLUMN IF EXISTS public_key;
+CREATE TABLE IF NOT EXISTS user_identities (
+  user_id     TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  public_key  TEXT NOT NULL,
+  created_at  BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_keys (
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kid         TEXT NOT NULL,
+  public_key  TEXT NOT NULL,
+  created_at  BIGINT NOT NULL,
+  PRIMARY KEY (user_id, kid)
+);
+CREATE INDEX IF NOT EXISTS user_keys_kid_idx ON user_keys (kid);
+
+CREATE TABLE IF NOT EXISTS blocked_users (
+  user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  blocked_user_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason           TEXT NOT NULL DEFAULT '',
+  created_at       BIGINT NOT NULL,
+  PRIMARY KEY (user_id, blocked_user_id),
+  CHECK (user_id <> blocked_user_id)
+);
+CREATE INDEX IF NOT EXISTS blocked_users_blocked_idx ON blocked_users (blocked_user_id);
+
+CREATE TABLE IF NOT EXISTS reported_users (
+  reported_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reported_user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  reason              TEXT NOT NULL DEFAULT '',
+  created_at          BIGINT NOT NULL,
+  PRIMARY KEY (reported_by_user_id, reported_user_id),
+  CHECK (reported_by_user_id <> reported_user_id)
+);
+CREATE INDEX IF NOT EXISTS reported_users_reported_idx ON reported_users (reported_user_id);
 `
 
 type PGStore struct {
@@ -126,7 +171,7 @@ func (p *PGStore) ListBottles(ctx context.Context, limit, offset int) ([]store.B
 	rows, err := p.pool.Query(ctx, `
 SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
-ORDER BY created_at DESC
+ORDER BY created_at DESC, id DESC
 LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, err
@@ -150,17 +195,17 @@ LIMIT $1 OFFSET $2`, limit, offset)
 	return bottles, rows.Err()
 }
 
-func (p *PGStore) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64) ([]store.Bottle, error) {
+func (p *PGStore) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 	query := `
 SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
-WHERE ($1 = 0 OR created_at < $1)
-ORDER BY created_at DESC
-LIMIT $2`
-	rows, err := p.pool.Query(ctx, query, beforeCreatedAt, limit)
+WHERE ($1 = 0 OR created_at < $1 OR (created_at = $1 AND id < $2))
+ORDER BY created_at DESC, id DESC
+LIMIT $3`
+	rows, err := p.pool.Query(ctx, query, beforeCreatedAt, beforeID, limit)
 	if err != nil {
 		return nil, err
 	}
