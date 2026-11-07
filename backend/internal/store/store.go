@@ -22,7 +22,12 @@ const (
 	authIdentityKey = "a09f:auth:identity"
 )
 
-var ErrBottleExists = errors.New("bottle already exists")
+var (
+	ErrBottleExists    = errors.New("bottle already exists")
+	ErrBottleNotActive = errors.New("bottle not active")
+	ErrEnvelopeLimit   = errors.New("envelope limit reached")
+	ErrBottleNotFound  = errors.New("bottle not found")
+)
 
 type PoolKey struct {
 	KID        string `json:"kid"`
@@ -760,10 +765,55 @@ return cjson.encode({ok=true, status=obj.status, deliveries=obj.deliveries})
 func (s *Store) GetBottle(ctx context.Context, id string) (Bottle, error) {
 	raw, err := s.rdb.Get(ctx, bottleRedisKey(id)).Result()
 	if err != nil {
+		if err == redis.Nil {
+			return Bottle{}, ErrBottleNotFound
+		}
 		return Bottle{}, err
 	}
 	var bottle Bottle
 	if err := json.Unmarshal([]byte(raw), &bottle); err != nil {
+		return Bottle{}, err
+	}
+	return bottle, nil
+}
+
+// AppendEnvelopes adds recipient envelopes to an ACTIVE bottle in place,
+// preserving its TTL. Duplicate kids are skipped. Total envelopes may not
+// exceed MaxDeliveries+1 (the +1 slot is the sender's self archive envelope).
+// Only the session-key holder can produce envelopes that actually decrypt;
+// foreign appends are inert garbage.
+func (s *Store) AppendEnvelopes(ctx context.Context, id string, envs []Envelope) (Bottle, error) {
+	bottle, err := s.GetBottle(ctx, id)
+	if err != nil {
+		return Bottle{}, err
+	}
+	if bottle.Status != "ACTIVE" {
+		return Bottle{}, ErrBottleNotActive
+	}
+	seen := make(map[string]bool, len(bottle.Envelopes)+len(envs))
+	for _, e := range bottle.Envelopes {
+		seen[e.KID] = true
+	}
+	added := 0
+	for _, e := range envs {
+		if seen[e.KID] {
+			continue
+		}
+		if len(bottle.Envelopes)+added+1 > bottle.MaxDeliveries+1 {
+			return Bottle{}, ErrEnvelopeLimit
+		}
+		bottle.Envelopes = append(bottle.Envelopes, e)
+		seen[e.KID] = true
+		added++
+	}
+	if added == 0 {
+		return bottle, nil
+	}
+	raw, err := json.Marshal(bottle)
+	if err != nil {
+		return Bottle{}, err
+	}
+	if err := s.rdb.SetArgs(ctx, bottleRedisKey(id), raw, redis.SetArgs{KeepTTL: true}).Err(); err != nil {
 		return Bottle{}, err
 	}
 	return bottle, nil

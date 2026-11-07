@@ -91,6 +91,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Post("/api/bottles", bottleLimiter, s.createBottle)
 	app.Get("/api/bottles", s.listBottles)
 	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
+	app.Post("/api/bottles/:id/envelopes", bottleLimiter, s.appendBottleEnvelopes)
 	app.Post("/api/bottles/:id/report", bottleLimiter, s.reportBottle)
 	app.Get("/api/auth/server-key", s.serverKey)
 	app.Post("/api/auth/nonce", nonceLimiter, s.issueNonce)

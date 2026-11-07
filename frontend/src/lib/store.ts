@@ -14,7 +14,7 @@ import {
   unwrapSessionKey,
   wrapSessionKey,
 } from "./crypto";
-import { idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
+import { idbDelete, idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
 import { claimUsername, deriveUserId, getIdentity, getIdentityRecord, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
@@ -190,9 +190,12 @@ export async function generateAndDeposit(ttlRaw: string) {
   const n = await depositUndeposited(ttlRaw);
   const capLabel = Number.isFinite(MAX_LOCAL_KEYS) ? `/${MAX_LOCAL_KEYS}` : "";
   log(`generated key material; deposited ${n} blind public key(s) (${inPool + n}${capLabel} in pool)`);
+  await deliverPendingBottles();
 }
 
 // ---------- bottles ----------
+
+const PENDING_PREFIX = "pending:";
 
 export async function dropBottle(text: string, ttlRaw: string, retried = false) {
   const trimmed = text.trim();
@@ -200,28 +203,27 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     log("message is empty", "warn");
     return;
   }
-  const { size = 0 } = await api<{ size?: number }>("/api/pool/kids?limit=1", { auth: false }).catch(() => ({ size: 0 }));
-  if (size < 1) {
-    log("blind pool is empty; deposit keys first", "err");
-    return;
-  }
-  const fetched = await api<{ keys?: { kid: string; publicKey: string }[] }>("/api/pool/fetch", {
-    method: "POST",
-    body: JSON.stringify({
-      count: BOTTLE_QUOTA,
-      exclude: state.keys.map((k) => k.kid),
-    }),
-  });
-  const allPoolKeys = fetched.keys || [];
-  const byKid = keyByKidMap();
-  const poolKeys = allPoolKeys.filter((pk) => !byKid.has(pk.kid));
-  if (poolKeys.length < 1) {
-    if (allPoolKeys.length > 0) {
-      log("all fetched keys belong to this device; generate keys on another device", "warn");
-    } else {
-      log("blind pool returned no keys; deposit more keys and retry", "err");
+  // Best-effort pool fetch — casting into the void is allowed even with zero
+  // recipients; open delivery slots are filled later by deliverPendingBottles.
+  let poolKeys: { kid: string; publicKey: string }[] = [];
+  try {
+    const { size = 0 } = await api<{ size?: number }>("/api/pool/kids?limit=1", { auth: false });
+    if (size > 0) {
+      const fetched = await api<{ keys?: { kid: string; publicKey: string }[] }>("/api/pool/fetch", {
+        method: "POST",
+        body: JSON.stringify({
+          count: BOTTLE_QUOTA,
+          exclude: state.keys.map((k) => k.kid),
+        }),
+      });
+      const byKid = keyByKidMap();
+      poolKeys = (fetched.keys || []).filter((pk) => !byKid.has(pk.kid));
+      if (!poolKeys.length && (fetched.keys || []).length > 0) {
+        log("all fetched keys belong to this device; generate keys on another device", "warn");
+      }
     }
-    return;
+  } catch {
+    // pool unreachable — still cast into the void
   }
 
   const bottleId = crypto.randomUUID();
@@ -255,11 +257,12 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
   const selfEnv = await wrapSessionKey(bottleId, identity.publicJwk, rawSessionKey, selfKid);
   selfEnv.kid = selfKid;
 
+  const maxDeliveries = BOTTLE_QUOTA;
   const bottle: Bottle = {
     id: bottleId,
     createdAt: Date.now(),
     depth: 1,
-    maxDeliveries: envelopes.length,
+    maxDeliveries,
     payloadIv: bytesToB64(payloadIV),
     ciphertext: bytesToB64(new Uint8Array(ciphertext)),
     envelopes: [...envelopes, selfEnv],
@@ -282,11 +285,80 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     id: bottleId,
     createdAt: Date.now(),
     depth: 1,
-    maxDeliveries: envelopes.length,
+    maxDeliveries,
     status: "ACTIVE",
   }, { v: 1, text: trimmed, reply: replyPair.publicJwk }, "");
+
+  const openSlots = maxDeliveries - envelopes.length;
+  if (openSlots > 0) {
+    // Keep the session key locally so open slots can be filled later when
+    // the pool has fresh keys — "cast into the void, deliver later".
+    await idbPut(META_STORE, {
+      id: `${PENDING_PREFIX}${bottleId}`,
+      sessionKey: bytesToB64(new Uint8Array(rawSessionKey)),
+      kids: envelopes.map((e) => e.kid as string),
+      createdAt: Date.now(),
+    });
+    log(`cast ${bottleId.slice(0, 8)} into the void — ${openSlots} delivery slot(s) open`);
+  } else {
+    log(`dropped bottle ${bottleId} to ${envelopes.length} blind recipients`);
+  }
   await renderInbox();
-  log(`dropped bottle ${bottleId} to ${envelopes.length} blind recipients`);
+}
+
+interface PendingCast {
+  id: string;
+  sessionKey?: string;
+  kids?: string[];
+}
+
+// deliverPendingBottles tops up open delivery slots on previously cast
+// bottles using whatever fresh pool keys are available right now.
+export async function deliverPendingBottles() {
+  const metas = (await idbGetAll<PendingCast>(META_STORE).catch(() => [])) as PendingCast[];
+  const pendings = metas.filter((m) => typeof m.id === "string" && m.id.startsWith(PENDING_PREFIX));
+  if (!pendings.length) return;
+  const byKid = keyByKidMap();
+  const ownKids = state.keys.map((k) => k.kid);
+  for (const p of pendings) {
+    const bottleId = p.id.slice(PENDING_PREFIX.length);
+    const kids = p.kids || [];
+    const remaining = BOTTLE_QUOTA - kids.length;
+    if (remaining <= 0 || !p.sessionKey) {
+      await idbDelete(META_STORE, p.id).catch(() => {});
+      continue;
+    }
+    try {
+      const fetched = await api<{ keys?: { kid: string; publicKey: string }[] }>("/api/pool/fetch", {
+        method: "POST",
+        body: JSON.stringify({ count: remaining, exclude: [...kids, ...ownKids] }),
+      });
+      const fresh = (fetched.keys || [])
+        .filter((pk) => !kids.includes(pk.kid) && !byKid.has(pk.kid))
+        .slice(0, remaining);
+      if (!fresh.length) continue;
+      const rawSessionKey = b64ToBytes(p.sessionKey).buffer as ArrayBuffer;
+      const envs = [];
+      for (const pk of fresh) {
+        const env = await wrapSessionKey(bottleId, JSON.parse(pk.publicKey) as JWK, rawSessionKey, pk.kid);
+        env.kid = pk.kid;
+        envs.push(env);
+      }
+      await api(`/api/bottles/${bottleId}/envelopes`, {
+        method: "POST",
+        body: JSON.stringify({ envelopes: envs }),
+      });
+      const merged = [...kids, ...envs.map((e) => e.kid as string)];
+      if (merged.length >= BOTTLE_QUOTA) {
+        await idbDelete(META_STORE, p.id).catch(() => {});
+      } else {
+        await idbPut(META_STORE, { ...p, kids: merged });
+      }
+      log(`delivered ${envs.length} late envelope(s) for cast ${bottleId.slice(0, 8)}`);
+    } catch (e) {
+      log(`pending deliver ${bottleId.slice(0, 8)}: ${(e as Error).message}`, "warn");
+    }
+  }
 }
 
 export async function replyBottle(parent: ThreadRecord, text: string) {
@@ -511,6 +583,7 @@ export async function checkBottles() {
   }
   await renderInbox();
   await refreshActivePoolKeys();
+  await deliverPendingBottles();
   log(`checked ${scanned} bottle(s); caught ${caught}`);
 }
 
@@ -581,26 +654,24 @@ export async function renderInbox() {
 export async function vaultKeysPayload() {
   const keys = await idbGetAll<KeyRecord>(KEY_STORE);
   const meta = await idbGetAll<ThreadRecord>(META_STORE).catch(() => []);
-  // Slim vault (v3): private key material only — pool keys, the identity key,
-  // and reply keys. Bottle plaintext/thread records are NOT exported; they are
-  // rebuilt from the server ciphertext on the new device via checkBottles
-  // (self: envelopes recover sent messages, pool/reply keys recover caught ones).
-  const keyMeta = meta.filter(
-    (m) => m?.id === "identity" || (typeof m?.id === "string" && m.id.startsWith(REPLY_PREFIX))
+  // Vault v4: secret key material ONLY. No metadata — the server already
+  // holds all bottle/thread/user data; the vault just carries the private
+  // keys needed to unlock it. publicJwk is omitted (derivable from the
+  // private JWK's x/y); deterministic reply keys need no storage at all.
+  const identity = meta.find((m) => m?.id === "identity");
+  const replies = meta.filter(
+    (m) => typeof m?.id === "string" && m.id.startsWith(REPLY_PREFIX) && m.privateJwk
   );
   return {
-    version: 3,
-    exportedAt: new Date().toISOString(),
-    keys: keys.map((k) => ({
-      kid: k.kid,
-      privateJwk: k.privateJwk,
-      publicJwk: k.publicJwk,
-      createdAt: k.createdAt,
-      depositedAt: k.depositedAt,
-      expiresAt: k.expiresAt,
-    })),
-    meta: keyMeta,
+    version: 4,
+    keys: keys.map((k) => ({ kid: k.kid, jwk: k.privateJwk })),
+    identity: identity?.privateJwk || null,
+    replies: replies.map((m) => ({ id: m.id, jwk: m.privateJwk })),
   };
+}
+
+function publicFromPrivate(jwk: JWK): JWK {
+  return { kty: jwk.kty, crv: jwk.crv, x: jwk.x, y: jwk.y };
 }
 
 async function encryptVault(plaintext: string, passphrase: string) {
@@ -644,7 +715,7 @@ async function decryptVault(blob: {
     wrapKey,
     b64ToBytes(blob.ciphertext)
   );
-  return JSON.parse(new TextDecoder().decode(plain)) as { keys: KeyRecord[]; meta: ThreadRecord[] };
+  return JSON.parse(new TextDecoder().decode(plain)) as Record<string, unknown>;
 }
 
 function downloadJson(filename: string, data: unknown) {
@@ -662,7 +733,7 @@ export async function exportVault() {
   // Identity key alone is worth exporting — it preserves the username,
   // auth proofs, reply-key derivation and self-envelope recovery even with
   // zero pool keys.
-  const hasIdentity = payload.meta.some((m) => m?.id === "identity");
+  const hasIdentity = !!payload.identity;
   if (!payload.keys.length && !hasIdentity) {
     log("no local keys to export", "warn");
     return;
@@ -679,30 +750,75 @@ export async function importVaultFile(file: File) {
   if (!passphrase) return;
   const text = await file.text();
   const blob = JSON.parse(text) as Parameters<typeof decryptVault>[0];
-  const payload = await decryptVault(blob, passphrase);
-  if (!Array.isArray(payload.keys)) throw new Error("invalid vault payload");
-  for (const k of payload.keys) {
-    if (!k.kid || !k.privateJwk || !k.publicJwk) continue;
-    await idbPut(KEY_STORE, {
-      kid: k.kid,
-      privateJwk: k.privateJwk,
-      publicJwk: k.publicJwk,
-      createdAt: k.createdAt || Date.now(),
-      depositedAt: k.depositedAt || null,
-      expiresAt: k.expiresAt || null,
-    });
-  }
-  let metaCount = 0;
-  for (const m of payload.meta || []) {
-    if (!m?.id) continue;
-    await idbPut(META_STORE, m);
-    metaCount += 1;
+  const payload = (await decryptVault(blob, passphrase)) as {
+    version?: number;
+    keys?: { kid?: string; jwk?: JWK; privateJwk?: JWK; publicJwk?: JWK; createdAt?: number; depositedAt?: number | null; expiresAt?: number | null }[];
+    identity?: JWK | null;
+    replies?: { id?: string; jwk?: JWK }[];
+    meta?: ThreadRecord[];
+  };
+  let restored = 0;
+
+  if (payload.version === 4) {
+    // v4: pure secret key material — {kid, jwk} pool keys, identity jwk,
+    // legacy reply jwks. Everything else is rebuilt from the server.
+    for (const k of payload.keys || []) {
+      if (!k.kid || !k.jwk) continue;
+      await idbPut(KEY_STORE, {
+        kid: k.kid,
+        privateJwk: k.jwk,
+        publicJwk: publicFromPrivate(k.jwk),
+        createdAt: Date.now(),
+        depositedAt: null,
+      });
+      restored++;
+    }
+    if (payload.identity) {
+      await idbPut(META_STORE, {
+        id: "identity",
+        privateJwk: payload.identity,
+        publicJwk: publicFromPrivate(payload.identity),
+      });
+      restored++;
+    }
+    for (const r of payload.replies || []) {
+      if (!r.id || !r.jwk) continue;
+      await idbPut(META_STORE, {
+        id: r.id,
+        privateJwk: r.jwk,
+        publicJwk: publicFromPrivate(r.jwk),
+        createdAt: Date.now(),
+      });
+      restored++;
+    }
+  } else {
+    // legacy vault shapes (v1–v3): keys carry full records, meta holds
+    // identity + reply records.
+    for (const k of payload.keys || []) {
+      if (!k.kid || !k.privateJwk || !k.publicJwk) continue;
+      await idbPut(KEY_STORE, {
+        kid: k.kid,
+        privateJwk: k.privateJwk,
+        publicJwk: k.publicJwk,
+        createdAt: k.createdAt || Date.now(),
+        depositedAt: k.depositedAt || null,
+        expiresAt: k.expiresAt || null,
+      });
+      restored++;
+    }
+    let metaCount = 0;
+    for (const m of payload.meta || []) {
+      if (!m?.id) continue;
+      await idbPut(META_STORE, m);
+      metaCount += 1;
+    }
+    restored += metaCount;
   }
   resetIdentityCache();
   await getIdentity().catch(() => null);
   await loadKeys();
   await renderInbox();
-  log(`imported vault with ${payload.keys.length} key(s), ${metaCount} thread record(s)`);
+  log(`imported vault with ${restored} key(s) restored`);
 }
 
 // ---------- panels ----------
