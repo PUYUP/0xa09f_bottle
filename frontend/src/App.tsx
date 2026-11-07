@@ -19,9 +19,7 @@ export default function App() {
   const state = useApp();
   const [message, setMessage] = useState("");
   const [ttl, setTtl] = useState("86400");
-  const [showMyKeys, setShowMyKeys] = useState(false);
-  const [showPool, setShowPool] = useState(false);
-  const [showAccount, setShowAccount] = useState(false);
+  const [page, setPage] = useState<"catch" | "pool" | "bait" | "account">("catch");
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [threadLimit, setThreadLimit] = useState(10);
   const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>> | null>(null);
@@ -102,29 +100,32 @@ export default function App() {
           <button
             className="retro-tool"
             disabled={busy}
-            onClick={() => run(checkBottles)}
+            onClick={() => {
+              setPage("catch");
+              run(checkBottles);
+            }}
             title="scan the water for messages addressed to your bait"
           >
             <span className="retro-tool-icon">🪝</span>
             <span>check catch</span>
           </button>
           <button
-            className={`retro-tool${showPool ? " active" : ""}`}
-            onClick={() => setShowPool((v) => !v)}
+            className={`retro-tool${page === "pool" ? " active" : ""}`}
+            onClick={() => setPage("pool")}
           >
             <span className="retro-tool-icon">🌊</span>
             <span>bait pool</span>
           </button>
           <button
-            className={`retro-tool${showMyKeys ? " active" : ""}`}
-            onClick={() => setShowMyKeys((v) => !v)}
+            className={`retro-tool${page === "bait" ? " active" : ""}`}
+            onClick={() => setPage("bait")}
           >
             <span className="retro-tool-icon">🪱</span>
             <span>my bait</span>
           </button>
           <button
-            className={`retro-tool${showAccount ? " active" : ""}`}
-            onClick={() => setShowAccount((v) => !v)}
+            className={`retro-tool${page === "account" ? " active" : ""}`}
+            onClick={() => setPage("account")}
           >
             <span className="retro-tool-icon">👤</span>
             <span>account</span>
@@ -184,11 +185,12 @@ export default function App() {
         </div>
       </div>
 
-      {showMyKeys && <MyKeysPanel onClose={() => setShowMyKeys(false)} />}
-      {showPool && <PoolPanel onClose={() => setShowPool(false)} />}
-      {showAccount && <AccountPanel onClose={() => setShowAccount(false)} />}
+      {page === "bait" && <MyKeysPanel onClose={() => setPage("catch")} />}
+      {page === "pool" && <PoolPanel onClose={() => setPage("catch")} />}
+      {page === "account" && <AccountPanel onClose={() => setPage("catch")} />}
 
-      {/* ── inbox ──────────────────────────────────────────── */}
+      {/* ── catch page ─────────────────────────────────────── */}
+      {page === "catch" && (
       <div className="bevel mb-2">
         <div className="retro-titlebar">
           <span>🎣 catch — {threads.length} thread{threads.length === 1 ? "" : "s"}</span>
@@ -212,7 +214,7 @@ export default function App() {
                     — generate a keypair and publish the public half into the bait pool
                   </li>
                   <li>
-                    <span className="retro-link" onClick={() => setShowAccount(true)}>
+                    <span className="retro-link" onClick={() => setPage("account")}>
                       👤 claim a username
                     </span>{" "}
                     — needed for blocking &amp; reporting
@@ -246,6 +248,7 @@ export default function App() {
           )}
         </div>
       </div>
+      )}
 
       {/* ── log ────────────────────────────────────────────── */}
       <div className="bevel">
