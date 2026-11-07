@@ -32,10 +32,16 @@ type PGStore struct {
 	pool *pgxpool.Pool
 }
 
-func New(ctx context.Context, databaseURL string) (*PGStore, error) {
+func New(ctx context.Context, databaseURL string, maxConns, minConns int) (*PGStore, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("pgx config: %w", err)
+	}
+	if maxConns > 0 {
+		cfg.MaxConns = int32(maxConns)
+	}
+	if minConns > 0 {
+		cfg.MinConns = int32(minConns)
 	}
 	// Avoid prepared-statement cache races (SQLSTATE 42P05) when multiple
 	// pooled connections prepare the same statement concurrently.
@@ -53,6 +59,21 @@ func New(ctx context.Context, databaseURL string) (*PGStore, error) {
 		return nil, fmt.Errorf("pg migrate: %w", err)
 	}
 	return &PGStore{pool: pool}, nil
+}
+
+func (p *PGStore) Ping(ctx context.Context) error {
+	return p.pool.Ping(ctx)
+}
+
+func (p *PGStore) TryAdvisoryLock(ctx context.Context, lockID int64) (bool, error) {
+	var acquired bool
+	err := p.pool.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired)
+	return acquired, err
+}
+
+func (p *PGStore) AdvisoryUnlock(ctx context.Context, lockID int64) error {
+	var unlocked bool
+	return p.pool.QueryRow(ctx, "SELECT pg_advisory_unlock($1)", lockID).Scan(&unlocked)
 }
 
 func (p *PGStore) Close() {

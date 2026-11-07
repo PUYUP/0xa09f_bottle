@@ -32,6 +32,7 @@ type Envelope struct {
 	AuthorPublicKey string `json:"authorPublicKey"`
 	WrapIV          string `json:"wrapIv"`
 	WrappedKey      string `json:"wrappedKey"`
+	PickupHash      string `json:"pickupHash,omitempty"`
 }
 
 type Bottle struct {
@@ -511,7 +512,14 @@ if already then
 end
 local envelopeFound = false
 for i, env in ipairs(obj.envelopes) do
-  if env.kid == ARGV[1] then envelopeFound = true end
+  if env.kid == ARGV[1] then
+    if env.pickupHash and env.pickupHash ~= '' then
+      if not ARGV[3] or ARGV[3] == '' or env.pickupHash ~= ARGV[3] then
+        return cjson.encode({ok=false, error='invalid_token', status=obj.status, deliveries=deliveries})
+      end
+    end
+    envelopeFound = true
+  end
 end
 if not envelopeFound then
   return cjson.encode({ok=false, error='unknown_key', status=obj.status, deliveries=deliveries})
@@ -539,8 +547,8 @@ func (s *Store) GetBottle(ctx context.Context, id string) (Bottle, error) {
 	return bottle, nil
 }
 
-func (s *Store) Pickup(ctx context.Context, id, kid string) (PickupResult, error) {
-	out, err := pickupScript.Run(ctx, s.rdb, []string{bottleRedisKey(id), activeKey}, kid, id).Text()
+func (s *Store) Pickup(ctx context.Context, id, kid, tokenHash string) (PickupResult, error) {
+	out, err := pickupScript.Run(ctx, s.rdb, []string{bottleRedisKey(id), activeKey}, kid, id, tokenHash).Text()
 	if err != nil {
 		return PickupResult{}, err
 	}

@@ -36,11 +36,18 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 		AllowHeaders: []string{"Content-Type"},
 	}))
 
-	poolLimiter := limiter.New(limiter.Config{
-		Max:        60,
+	depositLimiter := limiter.New(limiter.Config{
+		Max:        30,
 		Expiration: 1 * time.Minute,
 		LimitReached: func(c fiber.Ctx) error {
-			return fiber.NewError(fiber.StatusTooManyRequests, "pool rate limit exceeded")
+			return fiber.NewError(fiber.StatusTooManyRequests, "deposit rate limit exceeded")
+		},
+	})
+	fetchLimiter := limiter.New(limiter.Config{
+		Max:        15,
+		Expiration: 1 * time.Minute,
+		LimitReached: func(c fiber.Ctx) error {
+			return fiber.NewError(fiber.StatusTooManyRequests, "fetch rate limit exceeded")
 		},
 	})
 	bottleLimiter := limiter.New(limiter.Config{
@@ -52,8 +59,10 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	})
 
 	app.Get("/api/health", s.health)
-	app.Post("/api/pool/deposit", poolLimiter, s.depositKeys)
-	app.Post("/api/pool/fetch", poolLimiter, s.fetchKeys)
+	app.Get("/api/health/live", s.live)
+	app.Get("/api/health/ready", s.ready)
+	app.Post("/api/pool/deposit", depositLimiter, s.depositKeys)
+	app.Post("/api/pool/fetch", fetchLimiter, s.fetchKeys)
 	app.Get("/api/pool/keys", s.listPoolKeys)
 	app.Get("/api/pool/kids", s.listPoolKids)
 	app.Post("/api/bottles", bottleLimiter, s.createBottle)
@@ -66,4 +75,33 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 
 func (s *Server) health(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"ok": true, "time": time.Now().UTC().Format(time.RFC3339)})
+}
+
+func (s *Server) live(c fiber.Ctx) error {
+	return c.JSON(fiber.Map{"status": "alive"})
+}
+
+func (s *Server) ready(c fiber.Ctx) error {
+	ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
+	defer cancel()
+
+	if err := s.store.Ping(ctx); err != nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"status": "unhealthy",
+			"error":  "redis unavailable",
+		})
+	}
+	if s.pg != nil {
+		if err := s.pg.Ping(ctx); err != nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+				"status": "unhealthy",
+				"error":  "postgres unavailable",
+			})
+		}
+	}
+	return c.JSON(fiber.Map{
+		"status": "ready",
+		"redis":  "ok",
+		"pg":     s.pg != nil,
+	})
 }

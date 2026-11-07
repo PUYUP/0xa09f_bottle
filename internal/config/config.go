@@ -14,6 +14,8 @@ type Config struct {
 	BottleTTL   time.Duration
 	MaxPool     int
 	MaxBottles  int
+	DBMaxConns  int
+	DBMinConns  int
 }
 
 func FromEnv() Config {
@@ -25,6 +27,8 @@ func FromEnv() Config {
 		BottleTTL:   durationHours("BOTTLE_TTL_HOURS", 24*7),
 		MaxPool:     intEnv("MAX_POOL_KEYS", 10000),
 		MaxBottles:  intEnv("MAX_ACTIVE_BOTTLES", 500),
+		DBMaxConns:  intEnv("DB_MAX_CONNS", 25),
+		DBMinConns:  intEnv("DB_MIN_CONNS", 5),
 	}
 }
 

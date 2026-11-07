@@ -38,7 +38,7 @@ func main() {
 
 	var pg *pgstore.PGStore
 	if cfg.DatabaseURL != "" {
-		pg, err = pgstore.New(ctx, cfg.DatabaseURL)
+		pg, err = pgstore.New(ctx, cfg.DatabaseURL, cfg.DBMaxConns, cfg.DBMinConns)
 		if err != nil {
 			log.Fatalf("postgres init: %v", err)
 		}

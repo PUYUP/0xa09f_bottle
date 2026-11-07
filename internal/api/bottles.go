@@ -1,6 +1,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"log"
 	"sort"
 	"strconv"
@@ -60,7 +62,8 @@ func validateBottle(b store.Bottle) error {
 		if env.KID == "" || len(env.KID) > 128 ||
 			env.AuthorPublicKey == "" || len(env.AuthorPublicKey) > 8192 ||
 			env.WrapIV == "" || len(env.WrapIV) > 64 ||
-			env.WrappedKey == "" || len(env.WrappedKey) > 1024 {
+			env.WrappedKey == "" || len(env.WrappedKey) > 1024 ||
+			len(env.PickupHash) > 128 {
 			return fiber.NewError(fiber.StatusBadRequest, "incomplete or invalid envelope")
 		}
 	}
@@ -140,7 +143,8 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 }
 
 type pickupRequest struct {
-	KID string `json:"kid"`
+	KID         string `json:"kid"`
+	PickupToken string `json:"pickupToken,omitempty"`
 }
 
 func (s *Server) pickupBottle(c fiber.Ctx) error {
@@ -155,7 +159,15 @@ func (s *Server) pickupBottle(c fiber.Ctx) error {
 	if strings.TrimSpace(req.KID) == "" || len(req.KID) > 128 {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid kid")
 	}
-	result, err := s.store.Pickup(c.Context(), id, req.KID)
+	var tokenHash string
+	if req.PickupToken != "" {
+		if len(req.PickupToken) > 256 {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid pickup token")
+		}
+		h := sha256.Sum256([]byte(req.PickupToken))
+		tokenHash = base64.StdEncoding.EncodeToString(h[:])
+	}
+	result, err := s.store.Pickup(c.Context(), id, req.KID, tokenHash)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "pickup failed")
 	}

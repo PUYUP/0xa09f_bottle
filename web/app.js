@@ -310,6 +310,21 @@ async function importECDHPrivate(jwk) {
   );
 }
 
+async function derivePickupProof(rawSessionKey, bottleId) {
+  const keyBytes = new Uint8Array(rawSessionKey);
+  const bottleBytes = enc.encode(bottleId);
+  const tagBytes = enc.encode("a09f-pickup-v1");
+  const combined = new Uint8Array(keyBytes.length + bottleBytes.length + tagBytes.length);
+  combined.set(keyBytes, 0);
+  combined.set(bottleBytes, keyBytes.length);
+  combined.set(tagBytes, keyBytes.length + bottleBytes.length);
+  const tokenBuf = await crypto.subtle.digest("SHA-256", combined);
+  const token = bytesToB64(new Uint8Array(tokenBuf));
+  const hashBuf = await crypto.subtle.digest("SHA-256", enc.encode(token));
+  const hash = bytesToB64(new Uint8Array(hashBuf));
+  return { token, hash };
+}
+
 async function wrapSessionKey(bottleId, recipientPublicKeyJwk, rawSessionKey) {
   const authorPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
@@ -326,11 +341,13 @@ async function wrapSessionKey(bottleId, recipientPublicKeyJwk, rawSessionKey) {
   const iv = randBytes(12);
   const wrapped = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrapKey, rawSessionKey);
   const authorPublicJwk = await crypto.subtle.exportKey("jwk", authorPair.publicKey);
+  const { hash: pickupHash } = await derivePickupProof(rawSessionKey, bottleId);
   return {
     kid: null,
     authorPublicKey: JSON.stringify(authorPublicJwk),
     wrapIv: bytesToB64(iv),
     wrappedKey: bytesToB64(new Uint8Array(wrapped)),
+    pickupHash,
   };
 }
 
@@ -524,10 +541,10 @@ async function decryptPayload(bottle, rawSessionKey) {
   return dec.decode(plain);
 }
 
-async function claimBottle(bottleId, kid) {
+async function claimBottle(bottleId, kid, pickupToken) {
   return api(`/api/bottles/${encodeURIComponent(bottleId)}/pickup`, {
     method: "POST",
-    body: JSON.stringify({ kid }),
+    body: JSON.stringify({ kid, pickupToken }),
   });
 }
 
@@ -645,9 +662,10 @@ async function checkBottles() {
       try {
         const rawSession = await unwrapSessionKey(bottle, envelope, record);
         const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
+        const { token: pickupToken } = await derivePickupProof(rawSession, bottle.id);
         let claim = null;
         try {
-          claim = await claimBottle(bottle.id, envelope.kid);
+          claim = await claimBottle(bottle.id, envelope.kid, pickupToken);
         } catch (e) {
           claim = { ok: false, error: e.message };
         }

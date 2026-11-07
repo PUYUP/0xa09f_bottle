@@ -44,12 +44,28 @@ func TestValidateBottle(t *testing.T) {
 				AuthorPublicKey: `{"x":"...","y":"..."}`,
 				WrapIV:          "wrap-iv",
 				WrappedKey:      "wrapped-key",
+				PickupHash:      "valid-pickup-hash-base64",
 			},
 		},
 	}
 
 	if err := validateBottle(valid); err != nil {
 		t.Fatalf("expected valid bottle, got: %v", err)
+	}
+
+	// Oversized pickup hash
+	invalidHash := valid
+	invalidHash.Envelopes = []store.Envelope{
+		{
+			KID:             "kid-1",
+			AuthorPublicKey: `{"x":"...","y":"..."}`,
+			WrapIV:          "wrap-iv",
+			WrappedKey:      "wrapped-key",
+			PickupHash:      string(make([]byte, 200)),
+		},
+	}
+	if err := validateBottle(invalidHash); err == nil {
+		t.Errorf("expected error for oversized pickup hash")
 	}
 
 	// Payload too large

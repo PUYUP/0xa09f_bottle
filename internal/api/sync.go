@@ -43,8 +43,12 @@ func (s *Server) archiveBottle(ctx context.Context, id string) {
 	s.syncBottlePG(ctx, bottle)
 }
 
+const reconcilerLockID int64 = 90901
+
 // pgReconciler periodically re-upserts every active Redis bottle into
 // Postgres, healing any writes lost to crashes or prolonged PG outages.
+// In multi-replica deployments, it uses an advisory lock so only one replica
+// performs reconciliation at a time.
 func (s *Server) pgReconciler(ctx context.Context) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
@@ -53,16 +57,28 @@ func (s *Server) pgReconciler(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			bottles, err := s.store.ListBottles(context.Background(), 500, 0)
-			if err != nil {
-				log.Printf("pg reconcile list: %v", err)
+			if s.pg == nil {
 				continue
 			}
-			for _, b := range bottles {
-				if err := s.pg.SaveBottle(context.Background(), b); err != nil {
-					log.Printf("pg reconcile %s: %v", b.ID, err)
-				}
+			acquired, err := s.pg.TryAdvisoryLock(context.Background(), reconcilerLockID)
+			if err != nil || !acquired {
+				continue
 			}
+			s.reconcileOnce()
+			_ = s.pg.AdvisoryUnlock(context.Background(), reconcilerLockID)
+		}
+	}
+}
+
+func (s *Server) reconcileOnce() {
+	bottles, err := s.store.ListBottles(context.Background(), 500, 0)
+	if err != nil {
+		log.Printf("pg reconcile list: %v", err)
+		return
+	}
+	for _, b := range bottles {
+		if err := s.pg.SaveBottle(context.Background(), b); err != nil {
+			log.Printf("pg reconcile %s: %v", b.ID, err)
 		}
 	}
 }
