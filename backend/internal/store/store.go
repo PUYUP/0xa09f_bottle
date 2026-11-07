@@ -468,12 +468,15 @@ func (s *Store) ListPoolKids(ctx context.Context, limit int) ([]string, int64, e
 	return kids, size, nil
 }
 
-func (s *Store) ListPoolKeys(ctx context.Context, limit int) ([]PoolKey, int64, error) {
+func (s *Store) ListPoolKeys(ctx context.Context, limit, offset int) ([]PoolKey, int64, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 	if limit > 1000 {
 		limit = 1000
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	now := time.Now().Unix()
 	_ = s.rdb.ZRemRangeByScore(ctx, poolKey, "-inf", fmt.Sprint(now)).Err()
@@ -482,7 +485,8 @@ func (s *Store) ListPoolKeys(ctx context.Context, limit int) ([]PoolKey, int64, 
 	if err != nil {
 		return nil, 0, err
 	}
-	members, err := s.rdb.ZRange(ctx, poolKey, 0, int64(limit-1)).Result()
+	start := int64(offset)
+	members, err := s.rdb.ZRange(ctx, poolKey, start, start+int64(limit)-1).Result()
 	if err != nil {
 		return nil, 0, err
 	}

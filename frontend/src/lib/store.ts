@@ -707,12 +707,13 @@ export async function importVaultFile(file: File) {
 
 // ---------- panels ----------
 
-export async function refreshPoolKeys() {
+export async function refreshPoolKeys(offset = 0) {
   const { keys = [], size = 0 } = await api<{ keys?: PoolKeyInfo[]; size?: number }>(
-    "/api/pool/keys?limit=200",
+    `/api/pool/keys?limit=500&offset=${offset}`,
     { auth: false }
   );
-  setState({ poolKeys: keys, poolSize: size });
+  const prev = offset === 0 ? [] : (getState().poolKeys ?? []);
+  setState({ poolKeys: [...prev, ...keys], poolSize: size });
 }
 
 export async function resolveUserTarget(input: string): Promise<string | null> {

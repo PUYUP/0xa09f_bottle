@@ -28,16 +28,21 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
   );
 }
 
+const BAIT_PAGE = 50;
+
 export function MyKeysPanel({ onClose }: { onClose: () => void }) {
   const { keys, ownPoolKids, activePoolKeys } = useApp();
+  const [shown, setShown] = useState(BAIT_PAGE);
+  const visible = keys.slice(0, shown);
   return (
     <Panel title={`🪱 my bait (${keys.length})`} onClose={onClose}>
+      <div className="max-h-80 overflow-y-auto">
       <table className="w-full text-[13px]">
         <tbody>
           {keys.length === 0 && (
             <tr><td className="text-neutral-600">no bait yet — hit "throw bait"</td></tr>
           )}
-          {keys.map((k: KeyRecord) => {
+          {visible.map((k: KeyRecord) => {
             let meta: string;
             let cls = "";
             if (!k.depositedAt) {
@@ -63,7 +68,18 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
           })}
         </tbody>
       </table>
-      <p className="mt-2 text-[13px] text-neutral-600">active in pool: {activePoolKeys ?? "…"}</p>
+      </div>
+      <div className="mt-2 flex items-center gap-3 text-[13px]">
+        <span className="text-neutral-600">
+          showing {Math.min(shown, keys.length)} / {keys.length}
+        </span>
+        {shown < keys.length && (
+          <button className="retro-btn" onClick={() => setShown((s) => s + BAIT_PAGE)}>
+            show more
+          </button>
+        )}
+      </div>
+      <p className="mt-1 text-[13px] text-neutral-600">active in pool: {activePoolKeys ?? "…"}</p>
     </Panel>
   );
 }
@@ -71,28 +87,52 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
 export function PoolPanel({ onClose }: { onClose: () => void }) {
   const { poolKeys, poolSize } = useApp();
   const [loaded, setLoaded] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   if (!loaded) {
     setLoaded(true);
-    refreshPoolKeys().catch((e) => log(`pool: ${(e as Error).message}`, "err"));
+    refreshPoolKeys(0).catch((e) => log(`pool: ${(e as Error).message}`, "err"));
   }
+  const shown = poolKeys?.length ?? 0;
+  const total = poolSize ?? 0;
+  const hasMore = poolKeys !== null && shown < total;
   return (
-    <Panel title={`🌊 bait pool (${poolSize ?? "…"} keys)`} onClose={onClose}>
+    <Panel title={`🌊 bait pool (${total.toLocaleString()} keys)`} onClose={onClose}>
       <p className="mb-2 text-[13px] text-neutral-600">
         public keys anyone can seal a message to — the server cannot tell which ones are yours.
       </p>
-      <div className="max-h-64 overflow-y-auto">
+      <div className="max-h-80 overflow-y-auto">
         <table className="w-full text-[13px]">
           <tbody>
             {poolKeys === null && <tr><td className="text-neutral-600">loading…</td></tr>}
             {poolKeys?.length === 0 && <tr><td className="text-neutral-600">the water is empty — no bait in the pool</td></tr>}
-            {poolKeys?.map((k) => (
+            {poolKeys?.map((k, i) => (
               <tr key={k.kid}>
+                <td className="pr-3 font-mono">{i + 1}.</td>
                 <td className="pr-3 font-mono">{k.kid.slice(0, 13)}…</td>
                 <td className="text-neutral-600">{formatExpiry(k.expiresAt)}</td>
               </tr>
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="mt-2 flex items-center gap-3 text-[13px]">
+        <span className="text-neutral-600">
+          showing {shown.toLocaleString()} / {total.toLocaleString()}
+        </span>
+        {hasMore && (
+          <button
+            className="retro-btn"
+            disabled={loadingMore}
+            onClick={() => {
+              setLoadingMore(true);
+              refreshPoolKeys(shown)
+                .catch((e) => log(`pool: ${(e as Error).message}`, "err"))
+                .finally(() => setLoadingMore(false));
+            }}
+          >
+            {loadingMore ? "loading…" : "load more"}
+          </button>
+        )}
       </div>
     </Panel>
   );

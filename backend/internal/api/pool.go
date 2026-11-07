@@ -109,7 +109,13 @@ func (s *Server) listPoolKeys(c fiber.Ctx) error {
 			limit = n
 		}
 	}
-	keys, size, err := s.store.ListPoolKeys(c.Context(), limit)
+	offset := 0
+	if raw := c.Query("offset"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			offset = n
+		}
+	}
+	keys, size, err := s.store.ListPoolKeys(c.Context(), limit, offset)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
 	}

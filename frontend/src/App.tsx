@@ -23,6 +23,7 @@ export default function App() {
   const [showPool, setShowPool] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [threads, setThreads] = useState<ThreadNode[]>([]);
+  const [threadLimit, setThreadLimit] = useState(10);
   const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>> | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -232,7 +233,17 @@ export default function App() {
                 🎣 the water is calm — nothing on the line yet.
               </div>
             ))}
-          <ThreadList roots={threads} />
+          <ThreadList roots={threads.slice(0, threadLimit)} />
+          {threads.length > threadLimit && (
+            <div className="mt-2 text-center">
+              <button
+                className="retro-btn"
+                onClick={() => setThreadLimit((n) => n + 10)}
+              >
+                load more threads ({threads.length - threadLimit} left)
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
