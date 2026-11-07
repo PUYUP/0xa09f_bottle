@@ -540,7 +540,7 @@ async function dropBottle(retried = false) {
   }
   const { size = 0 } = await api("/api/pool/kids?limit=1", { auth: false }).catch(() => ({ size: 0 }));
   if (size < 1) {
-    log("blind pool is empty; deposit keys first", "err");
+    log("bait pool is empty; throw bait first", "err");
     return;
   }
   const fetched = await api("/api/pool/fetch", {
@@ -557,7 +557,7 @@ async function dropBottle(retried = false) {
     if (allPoolKeys.length > 0) {
       log("all fetched keys belong to this device; generate keys on another device", "warn");
     } else {
-      log("blind pool returned no keys; deposit more keys and retry", "err");
+      log("bait pool returned no keys; throw more bait and retry", "err");
     }
     return;
   }
@@ -607,7 +607,7 @@ async function dropBottle(retried = false) {
     });
   } catch (e) {
     if (e.data?.error === "blocked_key_conflict" && !retried) {
-      log("some recipients are blocked; refetching pool keys", "warn");
+      log("some recipients are blocked; refetching bait pool", "warn");
       return dropBottle(true);
     }
     throw e;
@@ -837,17 +837,17 @@ async function renderInbox() {
       const welcome = document.createElement("div");
       welcome.className = "panel";
       welcome.innerHTML = `
-        <div class="welcome-title">welcome to the sea</div>
-        <p class="hint">Messages here are sealed with E2EE — only the sender and the intended recipient can ever read them. To start receiving, throw some bait: deposit your public keys into the blind pool.</p>
+        <div class="welcome-title">welcome drifter!</div>
+        <p class="hint">Messages here are sealed with E2EE — only the sender and the intended recipient can ever read them. To start receiving, throw some bait: deposit your public keys into the bait pool.</p>
         <ol class="welcome-steps">
-          <li><b>[ generate + deposit keys ]</b> — publish a keypair to the pool (max ${MAX_LOCAL_KEYS})</li>
+          <li><b>[ throw bait ]</b> — publish a keypair to the pool (max ${MAX_LOCAL_KEYS})</li>
           <li><b>[ account ]</b> — claim a username to enable blocking &amp; reporting</li>
-          <li><b>[ drop bottle ]</b> a message, or wait for the current sea to wash one your way — then <b>[ check bottles ]</b></li>
+          <li><b>[ cast message ]</b> a message, or wait for the current sea to wash one your way — then <b>[ check catch ]</b></li>
         </ol>
         <div class="welcome-actions">
           <button class="btn primary" data-welcome="keys">[ throw bait ]</button>
           <button class="btn" data-welcome="account">[ claim username ]</button>
-          <button class="btn" data-welcome="check">[ check bottles ]</button>
+          <button class="btn" data-welcome="check">[ check catch ]</button>
         </div>`;
       welcome.querySelectorAll("[data-welcome]").forEach((b) =>
         b.addEventListener("click", () => {
@@ -859,7 +859,7 @@ async function renderInbox() {
     } else {
       const empty = document.createElement("div");
       empty.className = "empty";
-      empty.textContent = "no messages yet";
+      empty.textContent = "the water is calm — nothing on the line yet";
       inboxEl.appendChild(empty);
     }
     return;
@@ -983,7 +983,7 @@ async function checkBottles() {
 async function vaultKeysPayload() {
   const keys = await idbGetAll(KEY_STORE);
   const meta = await idbGetAll(META_STORE).catch(() => []);
-  // slim vault: private key material only (pool keys + identity + reply keys).
+  // slim vault: private key material only (bait pool + identity + reply keys).
   // bottle plaintext/thread records are rebuilt from server ciphertext.
   const keyMeta = meta.filter(
     (m) => m?.id === "identity" || (typeof m?.id === "string" && m.id.startsWith(REPLY_PREFIX))
@@ -1057,7 +1057,7 @@ async function exportVault() {
   const payload = await vaultKeysPayload();
   const hasIdentity = payload.meta.some((m) => m?.id === "identity");
   if (!payload.keys.length && !hasIdentity) {
-    log("no local keys to export", "warn");
+    log("no bait yet to export", "warn");
     return;
   }
   const passphrase = prompt("vault passphrase");
@@ -1126,7 +1126,7 @@ function renderMyKeys() {
   if (!keyRecords.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "no local keys";
+    empty.textContent = "no bait yet";
     list.appendChild(empty);
     return;
   }
@@ -1177,7 +1177,7 @@ async function refreshPoolKeys() {
   if (!keys.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "no keys in pool";
+    empty.textContent = "the water is empty — no bait in the pool";
     list.appendChild(empty);
     return;
   }

@@ -47,7 +47,7 @@ export default function App() {
   }, [state.records, state.ready]);
 
   const ttlValid = readTTLSeconds(ttl);
-  const capLabel = Number.isFinite(MAX_LOCAL_KEYS) ? String(MAX_LOCAL_KEYS) : "∞";
+  const isNewUser = state.keys.length === 0 && !identity?.username;
 
   const run = (fn: () => Promise<void>) => {
     setBusy(true);
@@ -57,166 +57,212 @@ export default function App() {
   };
 
   return (
-    <main className="mx-auto max-w-3xl px-4 py-6">
-      <header className="mb-4">
-        <div className="flex items-baseline justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-neutral-100">saltleak</h1>
-            <p className="text-[11px] text-neutral-500">anonymous e2ee bottle network for engineers</p>
-          </div>
-          <div className="text-right text-[11px] text-neutral-500">
-            <div>
-              keys {state.keys.length} ·{" "}
-              <button
-                className="text-sky-500/80 hover:text-sky-300"
-                onClick={() => setShowMyKeys((v) => !v)}
-                title="click to view your keys"
-              >
-                in pool {state.activePoolKeys ?? "…"}
-              </button>{" "}
-              · pool cap {capLabel} · quota {BOTTLE_QUOTA} · e2ee ·{" "}
-              {identity?.username ? `@${identity.username}` : "anon"}
-            </div>
-            {!state.ready && <div className="text-neutral-600">booting…</div>}
-          </div>
-        </div>
-      </header>
+    <main className="mx-auto max-w-3xl p-2">
+      {/* ── site header ────────────────────────────────────── */}
+      <div className="mb-2 text-center">
+        <h1 className="text-3xl font-bold" style={{ fontFamily: "Georgia, serif" }}>
+          <span className="text-blue-900">🌊</span> saltleak
+        </h1>
+        <p className="text-xs italic text-neutral-700">
+          anonymous e2ee message-in-a-bottle for engineers — est. 2025
+        </p>
+        <hr className="retro-hr" />
+      </div>
 
-      <section className="mb-4 rounded border border-neutral-800 bg-neutral-900/50 p-3">
-        <div className="flex gap-2">
-          <input
-            className="w-full rounded border border-neutral-800 bg-neutral-950 px-3 py-2 text-neutral-100 outline-none focus:border-neutral-600"
-            placeholder="write a message to the sea…"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                run(async () => {
-                  await dropBottle(message, ttl);
-                  setMessage("");
-                });
-              }
-            }}
-          />
-          <button
-            className="rounded border border-emerald-800 px-4 py-2 text-emerald-300 hover:bg-emerald-950 disabled:opacity-40"
-            disabled={busy}
-            onClick={() =>
-              run(async () => {
-                await dropBottle(message, ttl);
-                setMessage("");
-              })
-            }
-          >
-            [ drop ]
-          </button>
+      {/* ── status bar ─────────────────────────────────────── */}
+      <div className="bevel mb-2 flex flex-wrap items-center justify-between gap-2 px-2 py-1 text-[13px]">
+        <span>
+          you are:{" "}
+          <b>{identity?.username ? `@${identity.username}` : "anonymous drifter"}</b>
+          {!state.ready && <span className="text-neutral-600"> · booting…</span>}
+        </span>
+        <span className="text-neutral-700">
+          🎣 bait in pool: <b>{state.activePoolKeys ?? "…"}</b>/{MAX_LOCAL_KEYS} · casts:{" "}
+          <b>{BOTTLE_QUOTA}</b>/day · e2ee: <b>on</b>
+        </span>
+      </div>
+
+      {/* ── toolbar (yahoo messenger style) ────────────────── */}
+      <div className="bevel mb-2">
+        <div className="retro-titlebar">
+          <span>⚙ menu</span>
+          <span className="text-[13px]">saltleak.exe</span>
         </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
-          <label className="text-neutral-500">key ttl (s):</label>
-          <input
-            className="w-24 rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-neutral-200 outline-none focus:border-neutral-600"
-            value={ttl}
-            onChange={(e) => setTtl(e.target.value)}
-          />
-          <span className="text-neutral-500">
-            {ttlValid ? `expires in ${Math.round(ttlValid / 3600)}h` : "expires in —"}
-          </span>
-          <span className="mx-1 text-neutral-700">|</span>
+        <div className="retro-body flex flex-wrap gap-2 p-3">
           <button
-            className="rounded border border-neutral-800 px-2 py-1 text-neutral-400 hover:border-neutral-600"
+            className="retro-tool"
+            disabled={busy}
             onClick={() => run(() => generateAndDeposit(ttl))}
+            title="generate a keypair and publish the public half to the bait pool"
           >
-            [ + key ]
+            <span className="retro-tool-icon">🎣</span>
+            <span>throw bait</span>
           </button>
           <button
-            className="rounded border border-neutral-800 px-2 py-1 text-neutral-400 hover:border-neutral-600"
+            className="retro-tool"
+            disabled={busy}
             onClick={() => run(checkBottles)}
+            title="scan the water for messages addressed to your bait"
           >
-            [ check bottles ]
+            <span className="retro-tool-icon">🪝</span>
+            <span>check catch</span>
           </button>
           <button
-            className="rounded border border-neutral-800 px-2 py-1 text-neutral-400 hover:border-neutral-600"
+            className={`retro-tool${showPool ? " active" : ""}`}
             onClick={() => setShowPool((v) => !v)}
           >
-            [ pool keys ]
+            <span className="retro-tool-icon">🌊</span>
+            <span>bait pool</span>
           </button>
           <button
-            className="rounded border border-neutral-800 px-2 py-1 text-neutral-400 hover:border-neutral-600"
+            className={`retro-tool${showMyKeys ? " active" : ""}`}
+            onClick={() => setShowMyKeys((v) => !v)}
+          >
+            <span className="retro-tool-icon">🪱</span>
+            <span>my bait</span>
+          </button>
+          <button
+            className={`retro-tool${showAccount ? " active" : ""}`}
             onClick={() => setShowAccount((v) => !v)}
           >
-            [ account ]
+            <span className="retro-tool-icon">👤</span>
+            <span>account</span>
           </button>
           <VaultButtons />
         </div>
-      </section>
+      </div>
+
+      {/* ── composer ───────────────────────────────────────── */}
+      <div className="bevel mb-2">
+        <div className="retro-titlebar">
+          <span>🎣 cast a message</span>
+          <span className="text-[13px]">sealed with AES-256-GCM</span>
+        </div>
+        <div className="retro-body">
+          <div className="flex gap-2">
+            <input
+              className="retro-input retro-msg w-full"
+              placeholder="write a message to the sea…"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  run(async () => {
+                    await dropBottle(message, ttl);
+                    setMessage("");
+                  });
+                }
+              }}
+            />
+            <button
+              className="retro-btn retro-cast"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await dropBottle(message, ttl);
+                  setMessage("");
+                })
+              }
+            >
+              🎣<br />
+              cast it
+            </button>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-neutral-700">
+            <label>bait ttl (seconds):</label>
+            <input
+              className="retro-input w-24"
+              value={ttl}
+              onChange={(e) => setTtl(e.target.value)}
+            />
+            <span>
+              {ttlValid ? `floats for ~${Math.round(ttlValid / 3600)}h` : "invalid ttl"}
+            </span>
+          </div>
+        </div>
+      </div>
 
       {showMyKeys && <MyKeysPanel onClose={() => setShowMyKeys(false)} />}
       {showPool && <PoolPanel onClose={() => setShowPool(false)} />}
       {showAccount && <AccountPanel onClose={() => setShowAccount(false)} />}
 
-      <section className="space-y-3">
-        {threads.length === 0 &&
-          (state.keys.length === 0 && !identity?.username ? (
-            <div className="rounded border border-neutral-800 bg-neutral-900/50 p-4">
-              <div className="mb-2 text-sm font-semibold text-neutral-200">welcome to the sea</div>
-              <p className="mb-3 text-[12px] leading-relaxed text-neutral-500">
-                Messages here are sealed with E2EE — only the sender and the intended recipient can
-                ever read them. To start receiving, throw some bait: deposit your public keys into
-                the blind pool. Anyone can then seal a message to your keys.
-              </p>
-              <ol className="mb-3 list-decimal space-y-1 pl-5 text-[12px] text-neutral-400">
-                <li>
-                  <span className="text-neutral-300">[ + key ]</span> — generate a keypair and
-                  deposit the public half into the pool (max {MAX_LOCAL_KEYS})
-                </li>
-                <li>
-                  <span className="text-neutral-300">[ account ]</span> — claim a username to enable
-                  blocking &amp; reporting
-                </li>
-                <li>
-                  <span className="text-neutral-300">[ drop ]</span> a message, or wait for the
-                  current sea to wash one your way — then{" "}
-                  <span className="text-neutral-300">[ check bottles ]</span>
-                </li>
-              </ol>
-              <div className="flex gap-2">
-                <button
-                  className="rounded border border-emerald-800 px-3 py-1.5 text-[12px] text-emerald-300 hover:bg-emerald-950"
-                  onClick={() => run(() => generateAndDeposit(ttl))}
-                >
-                  [ throw bait ]
-                </button>
-                <button
-                  className="rounded border border-neutral-800 px-3 py-1.5 text-[12px] text-neutral-300 hover:border-neutral-600"
-                  onClick={() => setShowAccount(true)}
-                >
-                  [ claim username ]
-                </button>
-                <button
-                  className="rounded border border-neutral-800 px-3 py-1.5 text-[12px] text-neutral-400 hover:border-neutral-600"
-                  onClick={() => run(checkBottles)}
-                >
-                  [ check bottles ]
-                </button>
+      {/* ── inbox ──────────────────────────────────────────── */}
+      <div className="bevel mb-2">
+        <div className="retro-titlebar">
+          <span>🎣 catch — {threads.length} thread{threads.length === 1 ? "" : "s"}</span>
+          <span className="text-[13px]">only you can read these</span>
+        </div>
+        <div className="retro-body">
+          {threads.length === 0 &&
+            (isNewUser ? (
+              <div className="msg bevel-in">
+                <p className="mb-2">
+                  <b>👋 welcome drifter!</b> This corner of the internet seals every message with
+                  end-to-end encryption — nobody, not even the server, can read what you write.
+                  Only the sender and the intended recipient ever see the plaintext.
+                </p>
+                <p className="mb-2">To start catching messages, throw some bait:</p>
+                <ol className="mb-3 list-decimal pl-6">
+                  <li>
+                    <span className="retro-link" onClick={() => run(() => generateAndDeposit(ttl))}>
+                      🎣 throw bait
+                    </span>{" "}
+                    — generate a keypair and publish the public half into the bait pool
+                  </li>
+                  <li>
+                    <span className="retro-link" onClick={() => setShowAccount(true)}>
+                      👤 claim a username
+                    </span>{" "}
+                    — needed for blocking &amp; reporting
+                  </li>
+                  <li>
+                    <span className="retro-link" onClick={() => run(checkBottles)}>
+                      🪝 check catch
+                    </span>{" "}
+                    — scan the water for messages addressed to your bait
+                  </li>
+                </ol>
+                <p className="text-neutral-600">
+                  …or just cast a message below and see what bites back.
+                </p>
               </div>
-            </div>
-          ) : (
-            <div className="text-neutral-600">no messages yet</div>
-          ))}
-        <ThreadList roots={threads} />
-      </section>
+            ) : (
+              <div className="msg bevel-in text-center text-neutral-700">
+                🎣 the water is calm — nothing on the line yet.
+              </div>
+            ))}
+          <ThreadList roots={threads} />
+        </div>
+      </div>
 
-      <section className="mt-6">
-        <div className="mb-1 text-[11px] text-neutral-600">[ log ]</div>
-        <div className="max-h-48 space-y-0.5 overflow-y-auto rounded border border-neutral-800 bg-neutral-900/40 p-2 text-[11px]">
+      {/* ── log ────────────────────────────────────────────── */}
+      <div className="bevel">
+        <div className="retro-titlebar">
+          <span>📟 system log</span>
+          <span className="text-[13px]">debug console</span>
+        </div>
+        <div className="retro-body max-h-40 overflow-y-auto font-mono text-[13px] leading-tight">
           {state.logs.map((l) => (
-            <div key={l.id} className={l.cls === "err" ? "text-red-400" : l.cls === "warn" ? "text-amber-400" : "text-neutral-500"}>
+            <div
+              key={l.id}
+              className={
+                l.cls === "err"
+                  ? "text-red-700"
+                  : l.cls === "warn"
+                    ? "text-amber-700"
+                    : "text-neutral-600"
+              }
+            >
               [{l.time}] {l.msg}
             </div>
           ))}
         </div>
-      </section>
+      </div>
+
+      <p className="mt-3 text-center text-[13px] text-neutral-600">
+        saltleak · best viewed at 800×600 · works in netscape navigator · no cookies were harmed
+      </p>
     </main>
   );
 }

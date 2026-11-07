@@ -1,9 +1,184 @@
 @import "tailwindcss";
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
+/* ── y2k retro theme ─────────────────────────────────── */
 body {
-  @apply bg-neutral-950 text-neutral-200 font-mono text-sm;
+  font-size: 15px;
+  background-color: #c0c0c0;
+  background-image:
+    linear-gradient(#d4d0c8 1px, transparent 1px),
+    linear-gradient(90deg, #d4d0c8 1px, transparent 1px);
+  background-size: 24px 24px;
+  font-family: Georgia, "Times New Roman", Times, serif;
+  color: #000;
+}
+
+/* classic beveled box (win98 style) */
+.bevel {
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  background: #c0c0c0;
+}
+
+.bevel-in {
+  border: 2px solid;
+  border-color: #808080 #ffffff #ffffff #808080;
+  background: #ffffff;
+}
+
+.retro-btn {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 3px 10px;
+  background: #c0c0c0;
+  color: #000;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  cursor: pointer;
+  user-select: none;
+}
+
+.retro-btn:active,
+.retro-btn.active {
+  border-color: #808080 #ffffff #ffffff #808080;
+}
+
+.retro-btn:disabled {
+  color: #808080;
+  text-shadow: 1px 1px 0 #ffffff;
+  cursor: default;
+}
+
+.retro-cast {
+  min-width: 84px;
+  min-height: 56px;
+  font-size: 14px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.retro-input {
+  font-family: inherit;
+  font-size: 14px;
+  padding: 2px 4px;
+  background: #ffffff;
+  border: 2px solid;
+  border-color: #808080 #ffffff #ffffff #808080;
+  outline: none;
+}
+
+.retro-input:focus {
+  background: #ffffe1;
+}
+
+.retro-msg {
+  box-shadow: 1px 1px 0 #999999;
+}
+
+.retro-titlebar {
+  background: linear-gradient(90deg, #000080, #1084d0);
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 14px;
+  padding: 3px 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+}
+
+.retro-body {
+  padding: 8px;
+  background: #ffffff;
+}
+
+.retro-link {
+  color: #0000ee;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.retro-link:visited {
+  color: #551a8b;
+}
+
+.retro-tool {
+  font-family: inherit;
+  flex: 1 1 96px;
+  min-width: 96px;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px;
+  background: #c0c0c0;
+  color: #000;
+  border: 2px solid;
+  border-color: #ffffff #808080 #808080 #ffffff;
+  cursor: pointer;
+  user-select: none;
+  font-size: 14px;
+  line-height: 1.25;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.retro-tool .retro-tool-icon {
+  font-size: 36px;
+  line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .retro-tool {
+    flex: 0 0 calc(50% - 4px);
+    min-width: 0;
+    min-height: 0;
+    height: auto;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .retro-tool .retro-tool-icon {
+    font-size: 26px;
+  }
+}
+
+.retro-tool:active,
+.retro-tool.active {
+  border-color: #808080 #ffffff #ffffff #808080;
+  background: #b5b5b5;
+}
+
+.retro-tool:disabled {
+  color: #808080;
+  text-shadow: 1px 1px 0 #ffffff;
+  cursor: default;
+}
+
+hr.retro-hr {
+  border: none;
+  border-top: 1px solid #808080;
+  border-bottom: 1px solid #ffffff;
+  height: 2px;
+  margin: 8px 0;
+}
+
+/* message bubbles, forum style */
+.msg {
+  margin: 6px 0;
+  padding: 6px 8px;
+}
+.msg.reply {
+  margin-left: 24px;
+}
+
+.msg.sent {
+  background: #e8f0fe;
 }

@@ -1,5 +1,4 @@
 import { useRef, useState, useSyncExternalStore } from "react";
-import { useApp } from "../hooks/useApp";
 import { subscribe } from "../lib/store";
 import { getIdentityRecord, randomUsername as genName } from "../lib/identity";
 import {
@@ -14,16 +13,17 @@ import {
   refreshPoolKeys,
   unblockUser,
 } from "../lib/store";
+import { useApp } from "../hooks/useApp";
 import type { KeyRecord } from "../lib/types";
 
 function Panel({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="mt-2 rounded border border-neutral-800 bg-neutral-900/60 p-3">
-      <div className="mb-2 flex items-center justify-between text-[11px] text-neutral-500">
-        <span>[ {title} ]</span>
-        <button className="hover:text-neutral-200" onClick={onClose}>[ close ]</button>
+    <div className="bevel mb-2">
+      <div className="retro-titlebar">
+        <span>{title}</span>
+        <button className="retro-btn" style={{ padding: "0 6px" }} onClick={onClose}>✕</button>
       </div>
-      {children}
+      <div className="retro-body">{children}</div>
     </div>
   );
 }
@@ -31,35 +31,39 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
 export function MyKeysPanel({ onClose }: { onClose: () => void }) {
   const { keys, ownPoolKids, activePoolKeys } = useApp();
   return (
-    <Panel title={`my keys (${keys.length})`} onClose={onClose}>
-      <div className="space-y-1">
-        {keys.length === 0 && <div className="text-neutral-600">no local keys</div>}
-        {keys.map((k: KeyRecord) => {
-          let meta: string;
-          let cls = "text-neutral-500";
-          if (!k.depositedAt) {
-            meta = `pending · created ${k.createdAt ? new Date(k.createdAt).toLocaleString() : "—"}`;
-            cls = "text-amber-500/80";
-          } else if (ownPoolKids.has(k.kid)) {
-            const remaining = k.expiresAt ? (k.expiresAt - Date.now()) / 1000 : NaN;
-            meta = `in pool${k.expiresAt ? ` · ${remaining > 0 ? formatTTL(remaining) : "expired"}` : ""}`;
-            cls = "text-emerald-500/80";
-          } else if (k.expiresAt && k.expiresAt <= Date.now()) {
-            meta = `expired ${new Date(k.expiresAt).toLocaleString()}`;
-            cls = "text-red-500/80";
-          } else {
-            meta = `used · deposited ${k.depositedAt ? new Date(k.depositedAt).toLocaleString() : "—"}`;
-            cls = "text-sky-500/80";
-          }
-          return (
-            <div key={k.kid} className="flex items-baseline gap-3 text-[11px]">
-              <span className="text-neutral-400" title={k.kid}>{k.kid.slice(0, 13)}…</span>
-              <span className={cls}>{meta}</span>
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-2 text-[10px] text-neutral-600">in pool: {activePoolKeys ?? "…"}</div>
+    <Panel title={`🪱 my bait (${keys.length})`} onClose={onClose}>
+      <table className="w-full text-[13px]">
+        <tbody>
+          {keys.length === 0 && (
+            <tr><td className="text-neutral-600">no bait yet — hit "throw bait"</td></tr>
+          )}
+          {keys.map((k: KeyRecord) => {
+            let meta: string;
+            let cls = "";
+            if (!k.depositedAt) {
+              meta = `pending · created ${k.createdAt ? new Date(k.createdAt).toLocaleString() : "—"}`;
+              cls = "text-amber-700";
+            } else if (ownPoolKids.has(k.kid)) {
+              const remaining = k.expiresAt ? (k.expiresAt - Date.now()) / 1000 : NaN;
+              meta = `in pool${k.expiresAt ? ` · ${remaining > 0 ? formatTTL(remaining) : "expired"}` : ""}`;
+              cls = "text-green-700";
+            } else if (k.expiresAt && k.expiresAt <= Date.now()) {
+              meta = `expired ${new Date(k.expiresAt).toLocaleString()}`;
+              cls = "text-red-700";
+            } else {
+              meta = `used · deposited ${k.depositedAt ? new Date(k.depositedAt).toLocaleString() : "—"}`;
+              cls = "text-blue-800";
+            }
+            return (
+              <tr key={k.kid}>
+                <td className="pr-3 font-mono" title={k.kid}>{k.kid.slice(0, 13)}…</td>
+                <td className={cls}>{meta}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="mt-2 text-[13px] text-neutral-600">active in pool: {activePoolKeys ?? "…"}</p>
     </Panel>
   );
 }
@@ -72,16 +76,23 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
     refreshPoolKeys().catch((e) => log(`pool: ${(e as Error).message}`, "err"));
   }
   return (
-    <Panel title={`blind pool (${poolSize ?? "…"} in pool)`} onClose={onClose}>
-      <div className="max-h-64 space-y-1 overflow-y-auto">
-        {poolKeys === null && <div className="text-neutral-600">loading…</div>}
-        {poolKeys?.length === 0 && <div className="text-neutral-600">no keys in pool</div>}
-        {poolKeys?.map((k) => (
-          <div key={k.kid} className="flex items-baseline gap-3 text-[11px]">
-            <span className="text-neutral-400" title={k.kid}>{k.kid.slice(0, 13)}…</span>
-            <span className="text-neutral-500">{formatExpiry(k.expiresAt)}</span>
-          </div>
-        ))}
+    <Panel title={`🌊 bait pool (${poolSize ?? "…"} keys)`} onClose={onClose}>
+      <p className="mb-2 text-[13px] text-neutral-600">
+        public keys anyone can seal a message to — the server cannot tell which ones are yours.
+      </p>
+      <div className="max-h-64 overflow-y-auto">
+        <table className="w-full text-[13px]">
+          <tbody>
+            {poolKeys === null && <tr><td className="text-neutral-600">loading…</td></tr>}
+            {poolKeys?.length === 0 && <tr><td className="text-neutral-600">the water is empty — no bait in the pool</td></tr>}
+            {poolKeys?.map((k) => (
+              <tr key={k.kid}>
+                <td className="pr-3 font-mono">{k.kid.slice(0, 13)}…</td>
+                <td className="text-neutral-600">{formatExpiry(k.expiresAt)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </Panel>
   );
@@ -96,70 +107,73 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
   if (blocks === null) refreshBlocks().catch(() => {});
 
   return (
-    <Panel title="account" onClose={onClose}>
-      <div className="space-y-3 text-[11px]">
-        <div className="text-neutral-400">
-          {identity?.username ? `@${identity.username} · ${identity.userId}` : "anonymous — claim a username to enable block/report"}
+    <Panel title="👤 account" onClose={onClose}>
+      <div className="space-y-3 text-[14px]">
+        <div>
+          {identity?.username ? (
+            <>
+              signed in as <b>@{identity.username}</b>{" "}
+              <span className="font-mono text-[13px] text-neutral-600">({identity.userId})</span>
+            </>
+          ) : (
+            <i>anonymous — claim a username to enable blocking & reporting</i>
+          )}
         </div>
         <div className="flex gap-2">
           <input
-            className="w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-neutral-200 outline-none focus:border-neutral-600"
-            placeholder="username"
+            className="retro-input flex-1"
+            placeholder="choose a username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
           />
-          <button
-            className="rounded border border-neutral-700 px-2 py-1 hover:border-neutral-500"
-            onClick={() => setUsername(genName())}
-            title="random username"
-          >
+          <button className="retro-btn" onClick={() => setUsername(genName())} title="random username">
             ⚄
           </button>
           <button
-            className="rounded border border-neutral-700 px-2 py-1 hover:border-neutral-500"
+            className="retro-btn"
             onClick={() => claimUsernameUI(username.trim()).catch((e) => log(`claim: ${(e as Error).message}`, "err"))}
           >
-            [ claim ]
+            claim
           </button>
         </div>
         {identity?.username && (
           <>
             <div className="flex gap-2">
               <input
-                className="w-full rounded border border-neutral-800 bg-neutral-950 px-2 py-1 text-neutral-200 outline-none focus:border-neutral-600"
+                className="retro-input flex-1"
                 placeholder="username or user id"
                 value={target}
                 onChange={(e) => setTarget(e.target.value)}
               />
               <button
-                className="rounded border border-neutral-700 px-2 py-1 hover:border-red-500/60"
+                className="retro-btn"
                 onClick={() => blockOrReportUser("block", target).catch((e) => log(`block: ${(e as Error).message}`, "err"))}
               >
-                [ block ]
+                🚫 block
               </button>
               <button
-                className="rounded border border-neutral-700 px-2 py-1 hover:border-amber-500/60"
+                className="retro-btn"
                 onClick={() => blockOrReportUser("report", target).catch((e) => log(`report: ${(e as Error).message}`, "err"))}
               >
-                [ report ]
+                ⚠ report
               </button>
             </div>
             <div>
-              <div className="mb-1 text-neutral-600">blocked users</div>
-              <div className="space-y-1">
-                {blocks === null && <div className="text-neutral-600">loading…</div>}
-                {blocks?.length === 0 && <div className="text-neutral-600">not blocking anyone</div>}
+              <p className="mb-1 text-[13px] text-neutral-600">blocked users:</p>
+              <div>
+                {blocks === null && <span className="text-neutral-600">loading…</span>}
+                {blocks?.length === 0 && <span className="text-neutral-600">not blocking anyone</span>}
                 {blocks?.map((b) => (
                   <div key={b.blockedUserId} className="flex items-baseline gap-3">
-                    <span className="text-neutral-400" title={`${b.blockedUserId}${b.reason ? ` · ${b.reason}` : ""}`}>
+                    <span title={`${b.blockedUserId}${b.reason ? ` · ${b.reason}` : ""}`}>
                       @{b.username}
                     </span>
-                    <button
-                      className="text-[11px] text-neutral-500 hover:text-neutral-200"
+                    <span
+                      className="retro-link text-[13px]"
                       onClick={() => unblockUser(b.blockedUserId).catch((e) => log(`unblock: ${(e as Error).message}`, "err"))}
                     >
-                      [ unblock ]
-                    </button>
+                      unblock
+                    </span>
                   </div>
                 ))}
               </div>
@@ -181,16 +195,16 @@ export function VaultButtons() {
   return (
     <>
       <button
-        className="rounded border border-neutral-800 px-2 py-1 text-[11px] text-neutral-400 hover:border-neutral-600"
+        className="retro-tool"
+        title="export encrypted vault (private keys only)"
         onClick={() => exportVault().catch((e) => log(`export: ${(e as Error).message}`, "err"))}
       >
-        [ export vault ]
+        <span className="retro-tool-icon">🔐</span>
+        <span>export vault</span>
       </button>
-      <button
-        className="rounded border border-neutral-800 px-2 py-1 text-[11px] text-neutral-400 hover:border-neutral-600"
-        onClick={() => fileRef.current?.click()}
-      >
-        [ import vault ]
+      <button className="retro-tool" title="import vault on a new device" onClick={() => fileRef.current?.click()}>
+        <span className="retro-tool-icon">📂</span>
+        <span>import vault</span>
       </button>
       <input
         ref={fileRef}
