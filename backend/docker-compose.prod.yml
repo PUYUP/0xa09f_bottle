@@ -1,0 +1,46 @@
+# Production compose — VPS deploy (Ubuntu + Docker)
+# Postgres lives on Supabase; only app + redis run here.
+#
+# Usage:
+#   cp .env.production.example .env.production   # fill in secrets
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# TLS: put Caddy/nginx in front, or use `caddy` reverse_proxy to :8080.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      - ADDR=:8080
+      - REDIS_URL=redis://redis:6379/0
+    ports:
+      - "127.0.0.1:8080:8080"   # localhost only — terminate TLS at the proxy
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:
