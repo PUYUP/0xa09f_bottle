@@ -149,3 +149,36 @@ LIMIT $1 OFFSET $2`, limit, offset)
 	}
 	return bottles, rows.Err()
 }
+
+func (p *PGStore) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64) ([]store.Bottle, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	query := `
+SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
+FROM bottles
+WHERE ($1 = 0 OR created_at < $1)
+ORDER BY created_at DESC
+LIMIT $2`
+	rows, err := p.pool.Query(ctx, query, beforeCreatedAt, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bottles := make([]store.Bottle, 0, limit)
+	for rows.Next() {
+		var b store.Bottle
+		var envelopes, kids []byte
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.MaxDeliveries,
+			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &kids); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(envelopes, &b.Envelopes); err != nil {
+			continue
+		}
+		_ = json.Unmarshal(kids, &b.DeliveredKids)
+		bottles = append(bottles, b)
+	}
+	return bottles, rows.Err()
+}

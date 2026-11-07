@@ -280,7 +280,15 @@ func (s *Store) StartPoolSweeper(ctx context.Context, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				s.sweepPool(ctx)
+				// Distributed lock: only one replica sweeps the pool per interval
+				lockTTL := interval - 5*time.Second
+				if lockTTL < time.Second {
+					lockTTL = time.Minute
+				}
+				acquired, err := s.rdb.SetNX(ctx, "a09f:lock:sweeper", "1", lockTTL).Result()
+				if err == nil && acquired {
+					s.sweepPool(ctx)
+				}
 			}
 		}
 	}()
@@ -443,6 +451,66 @@ func (s *Store) ListBottles(ctx context.Context, limit, offset int) ([]Bottle, e
 	_ = s.rdb.ZRemRangeByScore(ctx, activeKey, "-inf", fmt.Sprint(cutoff)).Err()
 
 	ids, err := s.rdb.ZRevRange(ctx, activeKey, int64(offset), int64(offset+limit-1)).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return []Bottle{}, nil
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = bottleRedisKey(id)
+	}
+	vals, err := s.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	bottles := make([]Bottle, 0, len(vals))
+	missing := make([]string, 0)
+	for i, val := range vals {
+		if val == nil {
+			missing = append(missing, ids[i])
+			continue
+		}
+		raw, ok := val.(string)
+		if !ok {
+			missing = append(missing, ids[i])
+			continue
+		}
+		var bottle Bottle
+		if err := json.Unmarshal([]byte(raw), &bottle); err != nil {
+			missing = append(missing, ids[i])
+			continue
+		}
+		if bottle.Status != "ACTIVE" {
+			missing = append(missing, ids[i])
+			continue
+		}
+		bottles = append(bottles, bottle)
+	}
+	if len(missing) > 0 {
+		_ = s.rdb.ZRem(ctx, activeKey, missing).Err()
+	}
+	return bottles, nil
+}
+
+func (s *Store) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64) ([]Bottle, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	cutoff := time.Now().Add(-s.bottleTTL).Unix()
+	_ = s.rdb.ZRemRangeByScore(ctx, activeKey, "-inf", fmt.Sprint(cutoff)).Err()
+
+	maxScore := "+inf"
+	if beforeCreatedAt > 0 {
+		maxScore = fmt.Sprintf("(%d", beforeCreatedAt)
+	}
+
+	ids, err := s.rdb.ZRevRangeByScore(ctx, activeKey, &redis.ZRangeBy{
+		Max:   maxScore,
+		Min:   "-inf",
+		Count: int64(limit),
+	}).Result()
 	if err != nil {
 		return nil, err
 	}

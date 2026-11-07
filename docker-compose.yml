@@ -1,4 +1,16 @@
 services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - ADDR=:8080
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/bottle?sslmode=disable
+    depends_on:
+      - redis
+      - postgres
+
   redis:
     image: redis:8-alpine
     command: ["redis-server", "--appendonly", "yes"]
@@ -7,5 +19,17 @@ services:
     volumes:
       - redis-data:/data
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bottle
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
 volumes:
   redis-data:
+  pg-data:

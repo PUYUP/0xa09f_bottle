@@ -93,53 +93,104 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 	if limit > 200 {
 		limit = 200
 	}
-	offset := 0
-	if raw := c.Query("offset"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			offset = n
+
+	var cursor int64
+	if raw := c.Query("cursor"); raw != "" {
+		if n, err := strconv.ParseInt(raw, 10, 64); err == nil && n > 0 {
+			cursor = n
 		}
 	}
+
 	var bottles []store.Bottle
-	if s.pg != nil {
-		need := limit + offset
-		redisBottles, err := s.store.ListBottles(c.Context(), need, 0)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
-		}
-		pgBottles, err := s.pg.ListBottles(c.Context(), need, 0)
-		if err != nil {
-			log.Printf("pg list bottles: %v", err)
-			pgBottles = nil
-		}
-		seen := make(map[string]bool, len(redisBottles)+len(pgBottles))
-		merged := make([]store.Bottle, 0, len(redisBottles)+len(pgBottles))
-		for _, b := range redisBottles {
-			seen[b.ID] = true
-			merged = append(merged, b)
-		}
-		for _, b := range pgBottles {
-			if !seen[b.ID] {
+	if cursor > 0 {
+		// Scalable Cursor-based pagination (O(log N + limit) index seek)
+		if s.pg != nil {
+			redisBottles, err := s.store.ListBottlesCursor(c.Context(), limit, cursor)
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+			}
+			pgBottles, err := s.pg.ListBottlesCursor(c.Context(), limit, cursor)
+			if err != nil {
+				log.Printf("pg list bottles: %v", err)
+				pgBottles = nil
+			}
+			seen := make(map[string]bool, len(redisBottles)+len(pgBottles))
+			merged := make([]store.Bottle, 0, len(redisBottles)+len(pgBottles))
+			for _, b := range redisBottles {
+				seen[b.ID] = true
 				merged = append(merged, b)
 			}
-		}
-		sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
-		if offset >= len(merged) {
-			bottles = []store.Bottle{}
-		} else {
-			end := offset + limit
-			if end > len(merged) {
-				end = len(merged)
+			for _, b := range pgBottles {
+				if !seen[b.ID] {
+					merged = append(merged, b)
+				}
 			}
-			bottles = merged[offset:end]
+			sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
+			if len(merged) > limit {
+				merged = merged[:limit]
+			}
+			bottles = merged
+		} else {
+			var err error
+			bottles, err = s.store.ListBottlesCursor(c.Context(), limit, cursor)
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+			}
 		}
 	} else {
-		var err error
-		bottles, err = s.store.ListBottles(c.Context(), limit, offset)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+		// Offset pagination (backward compatible)
+		offset := 0
+		if raw := c.Query("offset"); raw != "" {
+			if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+				offset = n
+			}
+		}
+		if s.pg != nil {
+			need := limit + offset
+			redisBottles, err := s.store.ListBottles(c.Context(), need, 0)
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+			}
+			pgBottles, err := s.pg.ListBottles(c.Context(), need, 0)
+			if err != nil {
+				log.Printf("pg list bottles: %v", err)
+				pgBottles = nil
+			}
+			seen := make(map[string]bool, len(redisBottles)+len(pgBottles))
+			merged := make([]store.Bottle, 0, len(redisBottles)+len(pgBottles))
+			for _, b := range redisBottles {
+				seen[b.ID] = true
+				merged = append(merged, b)
+			}
+			for _, b := range pgBottles {
+				if !seen[b.ID] {
+					merged = append(merged, b)
+				}
+			}
+			sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
+			if offset >= len(merged) {
+				bottles = []store.Bottle{}
+			} else {
+				end := offset + limit
+				if end > len(merged) {
+					end = len(merged)
+				}
+				bottles = merged[offset:end]
+			}
+		} else {
+			var err error
+			bottles, err = s.store.ListBottles(c.Context(), limit, offset)
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+			}
 		}
 	}
-	return c.JSON(fiber.Map{"bottles": bottles})
+
+	var nextCursor int64
+	if len(bottles) > 0 {
+		nextCursor = bottles[len(bottles)-1].CreatedAt
+	}
+	return c.JSON(fiber.Map{"bottles": bottles, "nextCursor": nextCursor})
 }
 
 type pickupRequest struct {

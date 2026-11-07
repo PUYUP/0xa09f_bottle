@@ -12,6 +12,7 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/helmet"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
+	"github.com/gofiber/fiber/v3/middleware/logger"
 )
 
 type Server struct {
@@ -29,6 +30,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 		BodyLimit: 4 * 1024 * 1024,
 	})
 
+	app.Use(logger.New())
 	app.Use(helmet.New())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
