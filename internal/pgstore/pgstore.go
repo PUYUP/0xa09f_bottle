@@ -72,9 +72,13 @@ func (p *PGStore) SaveBottle(ctx context.Context, b store.Bottle) error {
 INSERT INTO bottles (id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 ON CONFLICT (id) DO UPDATE SET
-  deliveries = EXCLUDED.deliveries,
-  status = EXCLUDED.status,
-  delivered_kids = EXCLUDED.delivered_kids`,
+  deliveries = GREATEST(bottles.deliveries, EXCLUDED.deliveries),
+  status = CASE WHEN bottles.status = 'EXHAUSTED' OR EXCLUDED.status = 'EXHAUSTED' THEN 'EXHAUSTED' ELSE EXCLUDED.status END,
+  delivered_kids = CASE
+    WHEN jsonb_array_length(EXCLUDED.delivered_kids) > jsonb_array_length(bottles.delivered_kids)
+    THEN EXCLUDED.delivered_kids
+    ELSE bottles.delivered_kids
+  END`,
 		b.ID, b.CreatedAt, b.Depth, b.ParentID, b.MaxDeliveries, b.Deliveries, b.Status,
 		b.PayloadIV, b.Ciphertext, string(envelopes), string(kids))
 	return err

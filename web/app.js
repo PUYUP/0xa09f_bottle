@@ -375,9 +375,14 @@ async function dropBottle() {
     method: "POST",
     body: JSON.stringify({ count: BOTTLE_QUOTA }),
   });
-  const poolKeys = fetched.keys || [];
+  const allPoolKeys = fetched.keys || [];
+  const poolKeys = allPoolKeys.filter((pk) => !keyByKid.has(pk.kid));
   if (poolKeys.length < 1) {
-    log("blind pool returned no keys; deposit more keys and retry", "err");
+    if (allPoolKeys.length > 0) {
+      log("all fetched keys belong to this device; generate keys on another device", "warn");
+    } else {
+      log("blind pool returned no keys; deposit more keys and retry", "err");
+    }
     return;
   }
 
@@ -640,7 +645,12 @@ async function checkBottles() {
       try {
         const rawSession = await unwrapSessionKey(bottle, envelope, record);
         const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
-        const claim = await claimBottle(bottle.id, envelope.kid).catch((e) => ({ ok: false, error: e.message }));
+        let claim = null;
+        try {
+          claim = await claimBottle(bottle.id, envelope.kid);
+        } catch (e) {
+          claim = { ok: false, error: e.message };
+        }
         await idbPut(META_STORE, {
           id: `caught:${bottle.id}`,
           bottle,
@@ -652,7 +662,9 @@ async function checkBottles() {
         if ((bottle.depth || 1) >= MAX_THREAD_DEPTH && bottle.parentId) {
           await idbDelete(META_STORE, `${REPLY_PREFIX}${bottle.parentId}`).catch(() => {});
         }
-        caughtThisSession.add(bottle.id);
+        if (claim?.ok !== false) {
+          caughtThisSession.add(bottle.id);
+        }
         caught += 1;
         claimed = true;
         log(`caught bottle ${bottle.id.slice(0, 8)} (${claim?.status || claim?.error || "claimed"})`, claim?.ok === false ? "warn" : "");

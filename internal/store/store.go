@@ -165,7 +165,8 @@ redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
 if maxPool > 0 then
   local card = redis.call('ZCARD', KEYS[1])
   if card > maxPool then
-    local victims = redis.call('ZRANGE', KEYS[1], 0, card - maxPool - 1)
+    local excess = card - maxPool
+    local victims = redis.call('ZRANGE', KEYS[1], 0, excess - 1)
     for _, m in ipairs(victims) do
       local ok, obj = pcall(cjson.decode, m)
       if ok then
@@ -173,7 +174,7 @@ if maxPool > 0 then
         if kid then redis.call('ZREM', KEYS[2], kid) end
       end
     end
-    redis.call('ZREM', KEYS[1], unpack(victims))
+    redis.call('ZREMRANGEBYRANK', KEYS[1], 0, excess - 1)
   end
 end
 return added
@@ -289,7 +290,7 @@ func (s *Store) sweepPool(ctx context.Context) {
 	max := fmt.Sprint(now)
 	for {
 		members, err := s.rdb.ZRangeByScore(ctx, poolKey, &redis.ZRangeBy{
-			Min: "-", Max: max, Offset: 0, Count: 1000,
+			Min: "-inf", Max: max, Offset: 0, Count: 1000,
 		}).Result()
 		if err != nil || len(members) == 0 {
 			break
@@ -354,6 +355,9 @@ func (s *Store) ListPoolKeys(ctx context.Context, limit int) ([]PoolKey, int64, 
 	if limit > 1000 {
 		limit = 1000
 	}
+	now := time.Now().Unix()
+	_ = s.rdb.ZRemRangeByScore(ctx, poolKey, "-inf", fmt.Sprint(now)).Err()
+	_ = s.rdb.ZRemRangeByScore(ctx, kidsKey, "-inf", fmt.Sprint(now)).Err()
 	size, err := s.rdb.ZCard(ctx, poolKey).Result()
 	if err != nil {
 		return nil, 0, err
@@ -362,7 +366,6 @@ func (s *Store) ListPoolKeys(ctx context.Context, limit int) ([]PoolKey, int64, 
 	if err != nil {
 		return nil, 0, err
 	}
-	now := time.Now().Unix()
 	keys := make([]PoolKey, 0, len(members))
 	for _, item := range members {
 		key, ok := poolKeyFromMember(item)
@@ -377,6 +380,34 @@ func (s *Store) ListPoolKeys(ctx context.Context, limit int) ([]PoolKey, int64, 
 	return keys, size, nil
 }
 
+var createBottleScript = redis.NewScript(`
+local bottleKey = KEYS[1]
+local activeKey = KEYS[2]
+local bottleId = ARGV[1]
+local raw = ARGV[2]
+local ttlSeconds = tonumber(ARGV[3])
+local createdAt = tonumber(ARGV[4])
+local maxBottles = tonumber(ARGV[5])
+
+local setRes = redis.call('SET', bottleKey, raw, 'NX', 'EX', ttlSeconds)
+if not setRes then
+  return 'EXISTS'
+end
+redis.call('ZADD', activeKey, createdAt, bottleId)
+if maxBottles > 0 then
+  local card = redis.call('ZCARD', activeKey)
+  if card > maxBottles then
+    local excess = card - maxBottles
+    local victims = redis.call('ZRANGE', activeKey, 0, excess - 1)
+    for _, id in ipairs(victims) do
+      redis.call('DEL', 'a09f:bottle:' .. id)
+    end
+    redis.call('ZREMRANGEBYRANK', activeKey, 0, excess - 1)
+  end
+end
+return 'OK'
+`)
+
 func (s *Store) CreateBottle(ctx context.Context, bottle Bottle) error {
 	if bottle.CreatedAt == 0 {
 		bottle.CreatedAt = time.Now().Unix()
@@ -385,21 +416,17 @@ func (s *Store) CreateBottle(ctx context.Context, bottle Bottle) error {
 	if err != nil {
 		return err
 	}
-	ok, err := s.rdb.SetNX(ctx, bottleRedisKey(bottle.ID), raw, s.bottleTTL).Result()
+	ttlSec := int(s.bottleTTL.Seconds())
+	if ttlSec <= 0 {
+		ttlSec = 7 * 24 * 3600
+	}
+	res, err := createBottleScript.Run(ctx, s.rdb, []string{bottleRedisKey(bottle.ID), activeKey},
+		bottle.ID, string(raw), ttlSec, bottle.CreatedAt, s.maxBottles).Text()
 	if err != nil {
 		return err
 	}
-	if !ok {
+	if res == "EXISTS" {
 		return ErrBottleExists
-	}
-	if err := s.rdb.ZAdd(ctx, activeKey, redis.Z{Score: float64(bottle.CreatedAt), Member: bottle.ID}).Err(); err != nil {
-		return err
-	}
-	if s.maxBottles > 0 {
-		card, err := s.rdb.ZCard(ctx, activeKey).Result()
-		if err == nil && card > s.maxBottles {
-			_ = s.rdb.ZRemRangeByRank(ctx, activeKey, 0, card-s.maxBottles-1).Err()
-		}
 	}
 	return nil
 }

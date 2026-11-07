@@ -1,0 +1,170 @@
+package api
+
+import (
+	"log"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"a09f/bottle/internal/store"
+
+	"github.com/gofiber/fiber/v3"
+)
+
+func (s *Server) createBottle(c fiber.Ctx) error {
+	var bottle store.Bottle
+	if err := bindJSON(c, &bottle); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+	}
+	if err := validateBottle(bottle); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+	bottle.CreatedAt = time.Now().Unix()
+	bottle.Deliveries = 0
+	bottle.Status = "ACTIVE"
+	bottle.DeliveredKids = nil
+	if bottle.Depth <= 0 {
+		bottle.Depth = 1
+	}
+	if err := s.store.CreateBottle(c.Context(), bottle); err != nil {
+		if err == store.ErrBottleExists {
+			return fiber.NewError(fiber.StatusConflict, "bottle id already exists")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, "create failed")
+	}
+	s.syncBottlePG(c.Context(), bottle)
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": bottle.ID, "status": bottle.Status})
+}
+
+func validateBottle(b store.Bottle) error {
+	if len(b.ID) < 8 || len(b.ID) > 128 || !validBottleID(b.ID) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
+	}
+	if b.MaxDeliveries < 1 || b.MaxDeliveries > 5 {
+		return fiber.NewError(fiber.StatusBadRequest, "maxDeliveries must be 1..5")
+	}
+	if b.Depth < 0 || b.Depth > 20 {
+		return fiber.NewError(fiber.StatusBadRequest, "depth must be 0..20")
+	}
+	if b.ParentID != "" && (len(b.ParentID) > 128 || !validBottleID(b.ParentID)) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid parentId")
+	}
+	if len(b.Envelopes) != b.MaxDeliveries {
+		return fiber.NewError(fiber.StatusBadRequest, "envelope count must equal maxDeliveries")
+	}
+	if b.PayloadIV == "" || len(b.PayloadIV) > 64 || b.Ciphertext == "" || len(b.Ciphertext) > 256*1024 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid payload fields")
+	}
+	for _, env := range b.Envelopes {
+		if env.KID == "" || len(env.KID) > 128 ||
+			env.AuthorPublicKey == "" || len(env.AuthorPublicKey) > 8192 ||
+			env.WrapIV == "" || len(env.WrapIV) > 64 ||
+			env.WrappedKey == "" || len(env.WrappedKey) > 1024 {
+			return fiber.NewError(fiber.StatusBadRequest, "incomplete or invalid envelope")
+		}
+	}
+	return nil
+}
+
+func validBottleID(id string) bool {
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func (s *Server) listBottles(c fiber.Ctx) error {
+	limit := 50
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = n
+		}
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := 0
+	if raw := c.Query("offset"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	var bottles []store.Bottle
+	if s.pg != nil {
+		need := limit + offset
+		redisBottles, err := s.store.ListBottles(c.Context(), need, 0)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+		}
+		pgBottles, err := s.pg.ListBottles(c.Context(), need, 0)
+		if err != nil {
+			log.Printf("pg list bottles: %v", err)
+			pgBottles = nil
+		}
+		seen := make(map[string]bool, len(redisBottles)+len(pgBottles))
+		merged := make([]store.Bottle, 0, len(redisBottles)+len(pgBottles))
+		for _, b := range redisBottles {
+			seen[b.ID] = true
+			merged = append(merged, b)
+		}
+		for _, b := range pgBottles {
+			if !seen[b.ID] {
+				merged = append(merged, b)
+			}
+		}
+		sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
+		if offset >= len(merged) {
+			bottles = []store.Bottle{}
+		} else {
+			end := offset + limit
+			if end > len(merged) {
+				end = len(merged)
+			}
+			bottles = merged[offset:end]
+		}
+	} else {
+		var err error
+		bottles, err = s.store.ListBottles(c.Context(), limit, offset)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+		}
+	}
+	return c.JSON(fiber.Map{"bottles": bottles})
+}
+
+type pickupRequest struct {
+	KID string `json:"kid"`
+}
+
+func (s *Server) pickupBottle(c fiber.Ctx) error {
+	var req pickupRequest
+	if err := bindJSON(c, &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+	}
+	id := c.Params("id")
+	if !validBottleID(id) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid bottle id")
+	}
+	if strings.TrimSpace(req.KID) == "" || len(req.KID) > 128 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid kid")
+	}
+	result, err := s.store.Pickup(c.Context(), id, req.KID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "pickup failed")
+	}
+	if !result.OK {
+		return c.Status(fiber.StatusConflict).JSON(result)
+	}
+	if s.pg != nil {
+		s.archiveBottle(c.Context(), id)
+	}
+	return c.JSON(result)
+}
+

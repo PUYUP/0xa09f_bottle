@@ -46,7 +46,7 @@ func main() {
 		log.Printf("postgres archive enabled")
 	}
 
-	app := api.New(cfg, st, pg)
+	app := api.New(ctx, cfg, st, pg)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -2,22 +2,16 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"io/fs"
-	"log"
-	"mime"
-	"path"
-	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"a09f/bottle/internal/config"
 	"a09f/bottle/internal/pgstore"
 	"a09f/bottle/internal/store"
-	"a09f/bottle/web"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/cors"
+	"github.com/gofiber/fiber/v3/middleware/helmet"
+	"github.com/gofiber/fiber/v3/middleware/limiter"
 )
 
 type Server struct {
@@ -26,23 +20,45 @@ type Server struct {
 	pg    *pgstore.PGStore
 }
 
-func New(cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
+func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
 	s := &Server{cfg: cfg, store: st, pg: pg}
 	if pg != nil {
-		go s.pgReconciler()
+		go s.pgReconciler(ctx)
 	}
 	app := fiber.New(fiber.Config{
 		BodyLimit: 4 * 1024 * 1024,
 	})
 
+	app.Use(helmet.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{"GET", "POST", "HEAD", "OPTIONS"},
+		AllowHeaders: []string{"Content-Type"},
+	}))
+
+	poolLimiter := limiter.New(limiter.Config{
+		Max:        60,
+		Expiration: 1 * time.Minute,
+		LimitReached: func(c fiber.Ctx) error {
+			return fiber.NewError(fiber.StatusTooManyRequests, "pool rate limit exceeded")
+		},
+	})
+	bottleLimiter := limiter.New(limiter.Config{
+		Max:        30,
+		Expiration: 1 * time.Minute,
+		LimitReached: func(c fiber.Ctx) error {
+			return fiber.NewError(fiber.StatusTooManyRequests, "bottle rate limit exceeded")
+		},
+	})
+
 	app.Get("/api/health", s.health)
-	app.Post("/api/pool/deposit", s.depositKeys)
-	app.Post("/api/pool/fetch", s.fetchKeys)
+	app.Post("/api/pool/deposit", poolLimiter, s.depositKeys)
+	app.Post("/api/pool/fetch", poolLimiter, s.fetchKeys)
 	app.Get("/api/pool/keys", s.listPoolKeys)
 	app.Get("/api/pool/kids", s.listPoolKids)
-	app.Post("/api/bottles", s.createBottle)
+	app.Post("/api/bottles", bottleLimiter, s.createBottle)
 	app.Get("/api/bottles", s.listBottles)
-	app.Post("/api/bottles/:id/pickup", s.pickupBottle)
+	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
 
 	app.Use(s.serveStatic)
 	return app
@@ -50,330 +66,4 @@ func New(cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
 
 func (s *Server) health(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"ok": true, "time": time.Now().UTC().Format(time.RFC3339)})
-}
-
-type depositRequest struct {
-	Keys []store.PoolKey `json:"keys"`
-}
-
-func (s *Server) depositKeys(c fiber.Ctx) error {
-	var req depositRequest
-	if err := bindJSON(c, &req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
-	}
-	if len(req.Keys) == 0 || len(req.Keys) > 100 {
-		return fiber.NewError(fiber.StatusBadRequest, "keys must contain 1..100 entries")
-	}
-	for i := range req.Keys {
-		if strings.TrimSpace(req.Keys[i].KID) == "" || len(req.Keys[i].KID) > 128 {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid kid")
-		}
-		if strings.TrimSpace(req.Keys[i].PublicKey) == "" || len(req.Keys[i].PublicKey) > 8192 {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid publicKey")
-		}
-		var jwk struct {
-			X string `json:"x"`
-			Y string `json:"y"`
-		}
-		if err := json.Unmarshal([]byte(req.Keys[i].PublicKey), &jwk); err != nil || jwk.X == "" || jwk.Y == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid publicKey")
-		}
-		if req.Keys[i].TTLSeconds < 0 || req.Keys[i].TTLSeconds > 2592000 || (req.Keys[i].TTLSeconds > 0 && req.Keys[i].TTLSeconds < 60) {
-			return fiber.NewError(fiber.StatusBadRequest, "ttlSeconds must be 0 or 60..2592000")
-		}
-		req.Keys[i].ExpiresAt = 0
-	}
-	if err := s.store.DepositKeys(c.Context(), req.Keys); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "deposit failed")
-	}
-	return c.JSON(fiber.Map{"accepted": len(req.Keys)})
-}
-
-type fetchRequest struct {
-	Count int `json:"count"`
-}
-
-func (s *Server) fetchKeys(c fiber.Ctx) error {
-	var req fetchRequest
-	if len(c.Body()) > 0 {
-		if err := bindJSON(c, &req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid json")
-		}
-	}
-	if req.Count <= 0 {
-		req.Count = 2
-	}
-	if req.Count > 5 {
-		req.Count = 5
-	}
-	keys, err := s.store.FetchKeys(c.Context(), req.Count)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "fetch failed")
-	}
-	return c.JSON(fiber.Map{"keys": keys})
-}
-
-func (s *Server) listPoolKeys(c fiber.Ctx) error {
-	limit := 200
-	if raw := c.Query("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			limit = n
-		}
-	}
-	keys, size, err := s.store.ListPoolKeys(c.Context(), limit)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
-	}
-	return c.JSON(fiber.Map{"keys": keys, "size": size})
-}
-
-func (s *Server) listPoolKids(c fiber.Ctx) error {
-	limit := 20000
-	if raw := c.Query("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			limit = n
-		}
-	}
-	kids, size, err := s.store.ListPoolKids(c.Context(), limit)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
-	}
-	return c.JSON(fiber.Map{"kids": kids, "size": size})
-}
-
-func (s *Server) createBottle(c fiber.Ctx) error {
-	var bottle store.Bottle
-	if err := bindJSON(c, &bottle); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
-	}
-	if err := validateBottle(bottle); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
-	}
-	bottle.CreatedAt = time.Now().Unix()
-	bottle.Deliveries = 0
-	bottle.Status = "ACTIVE"
-	bottle.DeliveredKids = nil
-	if bottle.Depth <= 0 {
-		bottle.Depth = 1
-	}
-	if err := s.store.CreateBottle(c.Context(), bottle); err != nil {
-		if err == store.ErrBottleExists {
-			return fiber.NewError(fiber.StatusConflict, "bottle id already exists")
-		}
-		return fiber.NewError(fiber.StatusInternalServerError, "create failed")
-	}
-	s.syncBottlePG(c.Context(), bottle)
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": bottle.ID, "status": bottle.Status})
-}
-
-func validateBottle(b store.Bottle) error {
-	if len(b.ID) < 8 || len(b.ID) > 128 || !validBottleID(b.ID) {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
-	}
-	if b.MaxDeliveries < 1 || b.MaxDeliveries > 5 {
-		return fiber.NewError(fiber.StatusBadRequest, "maxDeliveries must be 1..5")
-	}
-	if b.Depth < 0 || b.Depth > 20 {
-		return fiber.NewError(fiber.StatusBadRequest, "depth must be 0..20")
-	}
-	if b.ParentID != "" && (len(b.ParentID) > 128 || !validBottleID(b.ParentID)) {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid parentId")
-	}
-	if len(b.Envelopes) != b.MaxDeliveries {
-		return fiber.NewError(fiber.StatusBadRequest, "envelope count must equal maxDeliveries")
-	}
-	if b.PayloadIV == "" || b.Ciphertext == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "payload fields required")
-	}
-	for _, env := range b.Envelopes {
-		if env.KID == "" || env.AuthorPublicKey == "" || env.WrapIV == "" || env.WrappedKey == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "incomplete envelope")
-		}
-	}
-	return nil
-}
-
-func validBottleID(id string) bool {
-	for _, r := range id {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func (s *Server) listBottles(c fiber.Ctx) error {
-	limit := 50
-	if raw := c.Query("limit"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			limit = n
-		}
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	if limit > 200 {
-		limit = 200
-	}
-	offset := 0
-	if raw := c.Query("offset"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
-			offset = n
-		}
-	}
-	var bottles []store.Bottle
-	if s.pg != nil {
-		need := limit + offset
-		redisBottles, err := s.store.ListBottles(c.Context(), need, 0)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
-		}
-		pgBottles, err := s.pg.ListBottles(c.Context(), need, 0)
-		if err != nil {
-			log.Printf("pg list bottles: %v", err)
-			pgBottles = nil
-		}
-		seen := make(map[string]bool, len(redisBottles)+len(pgBottles))
-		merged := make([]store.Bottle, 0, len(redisBottles)+len(pgBottles))
-		for _, b := range redisBottles {
-			seen[b.ID] = true
-			merged = append(merged, b)
-		}
-		for _, b := range pgBottles {
-			if !seen[b.ID] {
-				merged = append(merged, b)
-			}
-		}
-		sort.Slice(merged, func(i, j int) bool { return merged[i].CreatedAt > merged[j].CreatedAt })
-		if offset >= len(merged) {
-			bottles = []store.Bottle{}
-		} else {
-			end := offset + limit
-			if end > len(merged) {
-				end = len(merged)
-			}
-			bottles = merged[offset:end]
-		}
-	} else {
-		var err error
-		bottles, err = s.store.ListBottles(c.Context(), limit, offset)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "list failed")
-		}
-	}
-	return c.JSON(fiber.Map{"bottles": bottles})
-}
-
-type pickupRequest struct {
-	KID string `json:"kid"`
-}
-
-func (s *Server) pickupBottle(c fiber.Ctx) error {
-	var req pickupRequest
-	if err := bindJSON(c, &req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
-	}
-	if strings.TrimSpace(req.KID) == "" || len(req.KID) > 128 {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid kid")
-	}
-	result, err := s.store.Pickup(c.Context(), c.Params("id"), req.KID)
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "pickup failed")
-	}
-	if !result.OK {
-		return c.Status(fiber.StatusConflict).JSON(result)
-	}
-	if s.pg != nil {
-		s.archiveBottle(c.Context(), c.Params("id"))
-	}
-	return c.JSON(result)
-}
-
-// syncBottlePG writes through to Postgres synchronously; on failure it
-// schedules an async retry so transient PG outages do not lose data.
-func (s *Server) syncBottlePG(ctx context.Context, bottle store.Bottle) {
-	if s.pg == nil {
-		return
-	}
-	if err := s.pg.SaveBottle(ctx, bottle); err != nil {
-		log.Printf("pg save bottle %s: %v", bottle.ID, err)
-		s.retryBottlePG(bottle)
-	}
-}
-
-func (s *Server) retryBottlePG(bottle store.Bottle) {
-	go func() {
-		for i := 0; i < 10; i++ {
-			time.Sleep(time.Duration(i+1) * 3 * time.Second)
-			if err := s.pg.SaveBottle(context.Background(), bottle); err == nil {
-				return
-			}
-		}
-		log.Printf("pg sync gave up for bottle %s (reconciler will backfill if still active)", bottle.ID)
-	}()
-}
-
-func (s *Server) archiveBottle(ctx context.Context, id string) {
-	bottle, err := s.store.GetBottle(ctx, id)
-	if err != nil {
-		log.Printf("pg archive fetch %s: %v", id, err)
-		return
-	}
-	s.syncBottlePG(ctx, bottle)
-}
-
-// pgReconciler periodically re-upserts every active Redis bottle into
-// Postgres, healing any writes lost to crashes or prolonged PG outages.
-func (s *Server) pgReconciler() {
-	t := time.NewTicker(5 * time.Minute)
-	defer t.Stop()
-	for range t.C {
-		bottles, err := s.store.ListBottles(context.Background(), 500, 0)
-		if err != nil {
-			log.Printf("pg reconcile list: %v", err)
-			continue
-		}
-		for _, b := range bottles {
-			if err := s.pg.SaveBottle(context.Background(), b); err != nil {
-				log.Printf("pg reconcile %s: %v", b.ID, err)
-			}
-		}
-	}
-}
-
-func bindJSON(c fiber.Ctx, v any) error {
-	if len(c.Body()) == 0 {
-		return fiber.NewError(fiber.StatusBadRequest, "empty body")
-	}
-	return json.Unmarshal(c.Body(), v)
-}
-
-func (s *Server) serveStatic(c fiber.Ctx) error {
-	if c.Method() != fiber.MethodGet && c.Method() != fiber.MethodHead {
-		return c.Next()
-	}
-	raw := c.Path()
-	if strings.HasPrefix(raw, "/api/") {
-		return c.Next()
-	}
-	name := strings.TrimPrefix(raw, "/")
-	if name == "" {
-		name = "index.html"
-	}
-	name = path.Clean(name)
-	if strings.HasPrefix(name, "../") || name == ".." {
-		return c.Status(fiber.StatusNotFound).SendString("not found")
-	}
-	data, err := fs.ReadFile(web.FS, name)
-	if err != nil {
-		return c.Status(fiber.StatusNotFound).SendString("not found")
-	}
-	contentType := mime.TypeByExtension(path.Ext(name))
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	c.Set("Content-Type", contentType)
-	c.Set("Cache-Control", "no-store")
-	return c.Send(data)
 }
