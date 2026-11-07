@@ -53,6 +53,7 @@ func (s *Server) createBottle(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "create failed")
 	}
 	s.syncBottlePG(c.Context(), bottle)
+	s.events.publish(bottle)
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": bottle.ID, "status": bottle.Status})
 }
 

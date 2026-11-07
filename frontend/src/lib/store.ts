@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { api, API_BASE } from "./api";
 import {
   BOTTLE_QUOTA,
   MAX_LOCAL_KEYS,
@@ -389,17 +389,11 @@ export async function reportBottle(bottleId: string) {
 
 const caughtThisSession = new Set<string>();
 
-export async function checkBottles() {
-  let caught = 0;
-  let scanned = 0;
-  let cursor = "";
-  const byKid = keyByKidMap();
-
-  // Recipient filter: ask the server for only bottles addressed to us —
-  // pool kids + self:<userId> (own sent bottles) + reply:<parentId> for every
-  // thread bottle we already know. With zero known thread records we skip
-  // the filter entirely: one bootstrap scan discovers everything, then all
-  // later scans stay filtered.
+// catchKidsParam builds the comma-separated kid filter shared by the bottle
+// scan and the SSE subscription: live pool kids + self:<userId> (own sent
+// bottles) + reply:<parentId> for known thread bottles. With zero known
+// records we return "" — one bootstrap scan discovers everything.
+async function catchKidsParam(): Promise<string> {
   const metas = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
   const knownIds = new Set<string>();
   for (const r of metas) {
@@ -407,22 +401,29 @@ export async function checkBottles() {
       knownIds.add(r.bottle.id);
     }
   }
-  let kidsParam = "";
-  if (knownIds.size > 0) {
-    // Only kids still able to receive NEW bottles: currently in-pool keys
-    // (consumed/expired kids can never be targeted again — their old bottles
-    // are already in local records or covered by the bootstrap scan).
-    const liveKids = state.ownPoolKids.size > 0
-      ? [...state.ownPoolKids]
-      : state.keys.filter((k) => k.depositedAt && (!k.expiresAt || k.expiresAt > Date.now())).map((k) => k.kid);
-    const parts: string[] = liveKids;
-    const idt = await getIdentity().catch(() => null);
-    if (idt?.publicJwk) {
-      parts.push(`${SELF_PREFIX}${await deriveUserId(idt.publicJwk)}`);
-      for (const bid of [...knownIds].slice(0, 120)) parts.push(`${REPLY_PREFIX}${bid}`);
-      kidsParam = parts.join(",");
-    }
-  }
+  if (knownIds.size === 0) return "";
+  // Only kids still able to receive NEW bottles: currently in-pool keys
+  // (consumed/expired kids can never be targeted again — their old bottles
+  // are already in local records or covered by the bootstrap scan).
+  const liveKids = state.ownPoolKids.size > 0
+    ? [...state.ownPoolKids]
+    : state.keys.filter((k) => k.depositedAt && (!k.expiresAt || k.expiresAt > Date.now())).map((k) => k.kid);
+  const parts: string[] = liveKids;
+  const idt = await getIdentity().catch(() => null);
+  if (!idt?.publicJwk) return "";
+  parts.push(`${SELF_PREFIX}${await deriveUserId(idt.publicJwk)}`);
+  for (const bid of [...knownIds].slice(0, 120)) parts.push(`${REPLY_PREFIX}${bid}`);
+  return parts.join(",");
+}
+
+export async function checkBottles() {
+  let caught = 0;
+  let scanned = 0;
+  let cursor = "";
+  const byKid = keyByKidMap();
+
+  // Recipient filter: ask the server for only bottles addressed to us.
+  const kidsParam = await catchKidsParam();
   const kidsQuery = kidsParam ? `&kids=${encodeURIComponent(kidsParam)}` : "";
 
   for (let page = 0; page < 100; page++) {
@@ -514,7 +515,37 @@ export async function checkBottles() {
   }
   await renderInbox();
   await refreshActivePoolKeys();
+  connectEvents().catch(() => {});
   log(`checked ${scanned} bottle(s); caught ${caught}`);
+}
+
+// ---------- realtime (SSE) ----------
+// Server pushes `event: bottle` when a new bottle matches our kid filter;
+// we debounce and run a normal scan — crypto path stays identical to polling.
+let eventsSource: EventSource | null = null;
+let eventsUrl = "";
+let scanTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleCatchScan() {
+  if (scanTimer) return;
+  scanTimer = setTimeout(() => {
+    scanTimer = null;
+    checkBottles().catch(() => {});
+  }, 800);
+}
+
+export async function connectEvents() {
+  const kids = await catchKidsParam();
+  const url = `${API_BASE}/api/events${kids ? `?kids=${encodeURIComponent(kids)}` : ""}`;
+  if (url === eventsUrl && eventsSource) return;
+  eventsSource?.close();
+  eventsUrl = url;
+  try {
+    eventsSource = new EventSource(url);
+    eventsSource.addEventListener("bottle", scheduleCatchScan);
+  } catch {
+    eventsSource = null;
+  }
 }
 
 // ---------- inbox / threads ----------
@@ -839,6 +870,9 @@ export async function init() {
   }
   setState({ ready: true });
   checkBottles().catch((e) => log(`auto-check: ${(e as Error).message}`, "err"));
+  // Re-subscribe periodically so the kid filter picks up newly known
+  // threads and rotated pool keys even if the tab stays open for days.
+  setInterval(() => connectEvents().catch(() => {}), 60000);
 }
 
 export { getIdentityRecord };
