@@ -77,7 +77,8 @@ export default function App() {
         </span>
         <span className="text-neutral-700">
           🎣 bait in pool: <b>{state.activePoolKeys ?? "…"}</b>/{MAX_LOCAL_KEYS} · casts:{" "}
-          <b>{BOTTLE_QUOTA}</b>/day · e2ee: <b>on</b>
+          <b>{BOTTLE_QUOTA}</b>/day · e2ee:{" "}
+          <b className="text-green-700">on</b>
         </span>
       </div>
 
@@ -104,7 +105,7 @@ export default function App() {
               setPage("catch");
               run(checkBottles);
             }}
-            title="scan the water for messages addressed to your bait"
+            title="scan the void for catches addressed to your bait"
           >
             <span className="retro-tool-icon">🪝</span>
             <span>check catch</span>
@@ -137,14 +138,14 @@ export default function App() {
       {/* ── composer ───────────────────────────────────────── */}
       <div className="bevel mb-2">
         <div className="retro-titlebar">
-          <span>🎣 cast a message</span>
+          <span>🎣 cast into the void</span>
           <span className="text-[13px]">sealed with AES-256-GCM</span>
         </div>
         <div className="retro-body">
           <div className="flex gap-2">
             <input
               className="retro-input retro-msg w-full"
-              placeholder="write a message to the sea…"
+              placeholder="write something for the void…"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
@@ -193,7 +194,7 @@ export default function App() {
       {page === "catch" && (
       <div className="bevel mb-2">
         <div className="retro-titlebar">
-          <span>🎣 catch — {threads.length} thread{threads.length === 1 ? "" : "s"}</span>
+          <span>🎣 catch — {threads.length} line{threads.length === 1 ? "" : "s"}</span>
           <span className="text-[13px]">only you can read these</span>
         </div>
         <div className="retro-body">
@@ -201,11 +202,11 @@ export default function App() {
             (isNewUser ? (
               <div className="msg bevel-in">
                 <p className="mb-2">
-                  <b>👋 welcome drifter!</b> This corner of the internet seals every message with
+                  <b>👋 welcome drifter!</b> This corner of the internet seals every catch with
                   end-to-end encryption — nobody, not even the server, can read what you write.
                   Only the sender and the intended recipient ever see the plaintext.
                 </p>
-                <p className="mb-2">To start catching messages, throw some bait:</p>
+                <p className="mb-2">To start catching, throw some bait:</p>
                 <ol className="mb-3 list-decimal pl-6">
                   <li>
                     <span className="retro-link" onClick={() => run(() => generateAndDeposit(ttl))}>
@@ -223,16 +224,16 @@ export default function App() {
                     <span className="retro-link" onClick={() => run(checkBottles)}>
                       🪝 check catch
                     </span>{" "}
-                    — scan the water for messages addressed to your bait
+                    — scan the void for catches addressed to your bait
                   </li>
                 </ol>
                 <p className="text-neutral-600">
-                  …or just cast a message below and see what bites back.
+                  …or just cast below and see what bites back.
                 </p>
               </div>
             ) : (
               <div className="msg bevel-in text-center text-neutral-700">
-                🎣 the water is calm — nothing on the line yet.
+                🎣 the void is quiet — nothing on the line yet.
               </div>
             ))}
           <ThreadList roots={threads.slice(0, threadLimit)} />
@@ -242,7 +243,7 @@ export default function App() {
                 className="retro-btn"
                 onClick={() => setThreadLimit((n) => n + 10)}
               >
-                load more threads ({threads.length - threadLimit} left)
+                load more lines ({threads.length - threadLimit} left)
               </button>
             </div>
           )}

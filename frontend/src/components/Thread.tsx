@@ -36,7 +36,7 @@ function MessageNode({ node, sentIds }: { node: ThreadNode; sentIds: Set<string>
             <span
               className="retro-link"
               onClick={() => {
-                const text = window.prompt("reply message");
+                const text = window.prompt("write your reply…");
                 if (!text?.trim()) return;
                 replyBottle(node.rec, text.trim()).catch((e) => console.error(e));
               }}

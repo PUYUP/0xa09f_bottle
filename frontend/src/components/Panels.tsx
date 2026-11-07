@@ -98,13 +98,13 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
   return (
     <Panel title={`🌊 bait pool (${total.toLocaleString()} keys)`} onClose={onClose}>
       <p className="mb-2 text-[13px] text-neutral-600">
-        public keys anyone can seal a message to — the server cannot tell which ones are yours.
+        public keys anyone can cast a sealed catch to — the server cannot tell which ones are yours.
       </p>
       <div className="max-h-80 overflow-y-auto">
         <table className="w-full text-[13px]">
           <tbody>
             {poolKeys === null && <tr><td className="text-neutral-600">loading…</td></tr>}
-            {poolKeys?.length === 0 && <tr><td className="text-neutral-600">the water is empty — no bait in the pool</td></tr>}
+            {poolKeys?.length === 0 && <tr><td className="text-neutral-600">the void is empty — no bait in the pool</td></tr>}
             {poolKeys?.map((k, i) => (
               <tr key={k.kid}>
                 <td className="pr-3 font-mono">{i + 1}.</td>
