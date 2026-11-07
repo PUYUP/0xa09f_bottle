@@ -14,7 +14,7 @@ function MessageNode({ node, sentIds }: { node: ThreadNode; sentIds: Set<string>
   return (
     <div className={`msg bevel-in${isReply ? " reply" : ""}${isSent ? " sent" : ""}`}>
       <div className="mb-1 text-[13px] text-neutral-600">
-        <b>{isReply ? `↳ re: ${(bottle!.parentId || "").slice(0, 8)}` : `🎣 ${(bottle!.id || "").slice(0, 8)}`}</b>
+        <b>{isReply ? `re: ${(bottle!.parentId || "").slice(0, 8)}` : `🎣 ${(bottle!.id || "").slice(0, 8)}`}</b>
         {" · "}
         {claim?.status || "CLAIMED"} · {claim?.deliveries ?? "?"}/{bottle!.maxDeliveries} · depth{" "}
         {depth}/{MAX_THREAD_DEPTH} · key {(kid || "").slice(0, 8)}
@@ -50,18 +50,27 @@ function MessageNode({ node, sentIds }: { node: ThreadNode; sentIds: Set<string>
   );
 }
 
-function Thread({ node, sentIds }: { node: ThreadNode; sentIds: Set<string> }) {
-  const orphan = !!node.rec.bottle?.parentId;
+// Compact folder-style tree: each level adds ~20px, vertical guide lines are
+// drawn by .tree-child::before and stop after the last sibling.
+function TreeChildren({ node, sentIds }: { node: ThreadNode; sentIds: Set<string> }) {
+  if (!node.children.length) return null;
   return (
-    <div className={orphan ? "ml-6" : ""}>
-      <MessageNode node={node} sentIds={sentIds} />
-      {node.children.length > 0 && (
-        <div className="ml-3 border-l-2 border-neutral-400 pl-2">
-          {node.children.map((c) => (
-            <Thread key={c.rec.id} node={c} sentIds={sentIds} />
-          ))}
+    <div className="tree-children">
+      {node.children.map((c, i) => (
+        <div key={c.rec.id} className={`tree-child${i === node.children.length - 1 ? " last" : ""}`}>
+          <span className="tree-glyph">{i === node.children.length - 1 ? "└─" : "├─"}</span>
+          <Thread node={c} sentIds={sentIds} />
         </div>
-      )}
+      ))}
+    </div>
+  );
+}
+
+function Thread({ node, sentIds }: { node: ThreadNode; sentIds: Set<string> }) {
+  return (
+    <div>
+      <MessageNode node={node} sentIds={sentIds} />
+      <TreeChildren node={node} sentIds={sentIds} />
     </div>
   );
 }
@@ -74,7 +83,9 @@ export function ThreadList({ roots }: { roots: ThreadNode[] }) {
   return (
     <>
       {roots.map((r) => (
-        <Thread key={r.rec.id} node={r} sentIds={sentIds} />
+        <div key={r.rec.id} className="mb-3">
+          <Thread node={r} sentIds={sentIds} />
+        </div>
       ))}
     </>
   );
