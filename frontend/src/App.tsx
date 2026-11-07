@@ -86,7 +86,7 @@ export default function App() {
       <div className="bevel mb-2">
         <div className="retro-titlebar">
           <span>⚙ menu</span>
-          <span className="text-[13px]">saltleak.exe</span>
+          <span className="text-[13px]">saltleak.com</span>
         </div>
         <div className="retro-body flex flex-wrap gap-2 p-3">
           <button
