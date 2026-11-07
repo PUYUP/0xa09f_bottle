@@ -30,6 +30,21 @@ func (s *Server) createBottle(c fiber.Ctx) error {
 	if bottle.Depth <= 0 {
 		bottle.Depth = 1
 	}
+	if user, ok := s.authUser(c); ok {
+		kids := make([]string, 0, len(bottle.Envelopes))
+		for _, env := range bottle.Envelopes {
+			kids = append(kids, env.KID)
+		}
+		blocked, err := s.pg.BlockedKidsAmong(c.Context(), user.ID, kids)
+		if err != nil {
+			log.Printf("pg blocked check %s: %v", user.ID, err)
+		} else if len(blocked) > 0 {
+			return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+				"error":   "blocked_key_conflict",
+				"blocked": len(blocked),
+			})
+		}
+	}
 	if err := s.store.CreateBottle(c.Context(), bottle); err != nil {
 		if err == store.ErrBottleExists {
 			return fiber.NewError(fiber.StatusConflict, "bottle id already exists")

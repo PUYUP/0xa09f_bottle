@@ -20,7 +20,32 @@ type registerRequest struct {
 	PublicKey string `json:"publicKey"`
 	UserID    string `json:"userId"`
 	Ts        int64  `json:"ts"`
+	Nonce     string `json:"nonce"`
 	Proof     string `json:"proof"`
+}
+
+type nonceRequest struct {
+	UserID string `json:"userId"`
+}
+
+var userIDRe = regexp.MustCompile(`^u_[0-9a-f]{32}$`)
+
+// issueNonce hands out a single-use nonce bound to a user id. Issuance is
+// unauthenticated on purpose: a nonce alone is useless without the
+// proof-of-possession that binds it.
+func (s *Server) issueNonce(c fiber.Ctx) error {
+	var req nonceRequest
+	if err := bindJSON(c, &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+	}
+	if !userIDRe.MatchString(req.UserID) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid userId")
+	}
+	nonce, err := s.store.IssueNonce(c.Context(), req.UserID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "nonce failed")
+	}
+	return c.JSON(fiber.Map{"nonce": nonce, "expiresIn": 600})
 }
 
 // registerUser claims a username for an ECDH identity key. The request must
@@ -52,7 +77,11 @@ func (s *Server) registerUser(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "auth key unavailable")
 	}
-	if !keyauth.VerifyProof(priv, req.PublicKey, userID, req.Ts, req.Proof, time.Now().Unix()) {
+	ok, err := s.store.ConsumeNonce(c.Context(), req.Nonce, userID)
+	if err != nil || !ok {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid or used nonce")
+	}
+	if !keyauth.VerifyProof(priv, req.PublicKey, userID, req.Ts, req.Nonce, req.Proof, time.Now().Unix()) {
 		return fiber.NewError(fiber.StatusUnauthorized, "invalid proof")
 	}
 

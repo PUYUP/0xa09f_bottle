@@ -73,6 +73,13 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 			return fiber.NewError(fiber.StatusTooManyRequests, "user rate limit exceeded")
 		},
 	})
+	nonceLimiter := limiter.New(limiter.Config{
+		Max:        120,
+		Expiration: 1 * time.Minute,
+		LimitReached: func(c fiber.Ctx) error {
+			return fiber.NewError(fiber.StatusTooManyRequests, "nonce rate limit exceeded")
+		},
+	})
 
 	app.Get("/api/health", s.health)
 	app.Get("/api/health/live", s.live)
@@ -86,6 +93,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
 	app.Post("/api/bottles/:id/report", bottleLimiter, s.reportBottle)
 	app.Get("/api/auth/server-key", s.serverKey)
+	app.Post("/api/auth/nonce", nonceLimiter, s.issueNonce)
 	app.Post("/api/users", userLimiter, s.registerUser)
 	app.Get("/api/me", s.me)
 	app.Get("/api/users/by-username/:username", s.getUserByUsername)

@@ -144,18 +144,21 @@ func SharedSecret(priv *ecdh.PrivateKey, peerPub *ecdh.PublicKey) ([]byte, error
 	return priv.ECDH(peerPub)
 }
 
-// ProofHash computes the expected proof digest for a request.
-func ProofHash(shared []byte, userID string, ts int64) []byte {
+// ProofHash computes the expected proof digest for a request. The nonce is
+// a single-use value issued by the server; binding it into the hash makes
+// every proof unique per request and kills replay.
+func ProofHash(shared []byte, userID string, ts int64, nonce string) []byte {
 	h := sha256.New()
 	h.Write(shared)
 	h.Write([]byte(userID))
 	h.Write([]byte(strconv.FormatInt(ts, 10)))
+	h.Write([]byte(nonce))
 	return h.Sum(nil)
 }
 
 // EncodeProof returns the base64 proof string a client must send.
-func EncodeProof(shared []byte, userID string, ts int64) string {
-	return base64.StdEncoding.EncodeToString(ProofHash(shared, userID, ts))
+func EncodeProof(shared []byte, userID string, ts int64, nonce string) string {
+	return base64.StdEncoding.EncodeToString(ProofHash(shared, userID, ts, nonce))
 }
 
 // DecodeProof parses a base64 proof string.
@@ -164,8 +167,9 @@ func DecodeProof(proof string) ([]byte, error) {
 }
 
 // VerifyProof checks a client proof against the server's private key and the
-// user's stored public key, including the timestamp freshness window.
-func VerifyProof(serverPriv *ecdh.PrivateKey, userPubJWK, userID string, ts int64, proofB64 string, now int64) bool {
+// user's stored public key, including the timestamp freshness window. The
+// caller is responsible for consuming the nonce beforehand.
+func VerifyProof(serverPriv *ecdh.PrivateKey, userPubJWK, userID string, ts int64, nonce, proofB64 string, now int64) bool {
 	if ts <= 0 {
 		return false
 	}
@@ -174,6 +178,9 @@ func VerifyProof(serverPriv *ecdh.PrivateKey, userPubJWK, userID string, ts int6
 		delta = -delta
 	}
 	if delta > ProofWindowSkew {
+		return false
+	}
+	if nonce == "" {
 		return false
 	}
 	userPub, err := ParsePublicKey(userPubJWK)
@@ -188,6 +195,6 @@ func VerifyProof(serverPriv *ecdh.PrivateKey, userPubJWK, userID string, ts int6
 	if err != nil {
 		return false
 	}
-	want := ProofHash(shared, userID, ts)
+	want := ProofHash(shared, userID, ts, nonce)
 	return subtle.ConstantTimeCompare(got, want) == 1
 }

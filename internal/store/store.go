@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -297,6 +299,41 @@ func (s *Store) FetchKeys(ctx context.Context, count int, exclude []string) ([]P
 
 func (s *Store) PoolSize(ctx context.Context) (int64, error) {
 	return s.rdb.ZCard(ctx, poolKey).Result()
+}
+
+// Nonce issuance/consumption for single-use auth proofs.
+const noncePrefix = "a09f:auth:nonce:"
+
+const nonceTTL = 10 * time.Minute
+
+// IssueNonce stores a single-use nonce bound to userID for nonceTTL.
+func (s *Store) IssueNonce(ctx context.Context, userID string) (string, error) {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	nonce := hex.EncodeToString(buf)
+	if err := s.rdb.Set(ctx, noncePrefix+nonce, userID, nonceTTL).Err(); err != nil {
+		return "", err
+	}
+	return nonce, nil
+}
+
+// ConsumeNonce atomically deletes the nonce and reports whether it existed
+// and was bound to userID. GETDEL guarantees single use even under
+// concurrent requests.
+func (s *Store) ConsumeNonce(ctx context.Context, nonce, userID string) (bool, error) {
+	if nonce == "" || len(nonce) > 128 {
+		return false, nil
+	}
+	val, err := s.rdb.GetDel(ctx, noncePrefix+nonce).Result()
+	if err == redis.Nil {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return val == userID, nil
 }
 
 // AuthIdentity is the server's static ECDH keypair used to verify

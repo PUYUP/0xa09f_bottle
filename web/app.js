@@ -207,7 +207,19 @@ async function getServerPub() {
   return serverPubPromise;
 }
 
-async function computeProof(privateJwk, serverPub, userId) {
+async function fetchNonce(userId) {
+  // raw fetch: api() itself needs authHeaders -> fetchNonce
+  const res = await fetch("/api/auth/nonce", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error || `http ${res.status}`);
+  return data.nonce;
+}
+
+async function computeProof(privateJwk, serverPub, userId, nonce) {
   const priv = await crypto.subtle.importKey(
     "jwk",
     privateJwk,
@@ -220,23 +232,29 @@ async function computeProof(privateJwk, serverPub, userId) {
   const enc = new TextEncoder();
   const uid = enc.encode(userId);
   const tsBytes = enc.encode(String(ts));
+  const nonceBytes = enc.encode(nonce);
   const shared = new Uint8Array(bits);
-  const buf = new Uint8Array(shared.length + uid.length + tsBytes.length);
+  const buf = new Uint8Array(shared.length + uid.length + tsBytes.length + nonceBytes.length);
   buf.set(shared);
   buf.set(uid, shared.length);
   buf.set(tsBytes, shared.length + uid.length);
+  buf.set(nonceBytes, shared.length + uid.length + tsBytes.length);
   const digest = await crypto.subtle.digest("SHA-256", buf);
-  return { ts, proof: bytesToB64(new Uint8Array(digest)) };
+  return { ts, nonce, proof: bytesToB64(new Uint8Array(digest)) };
 }
 
 async function authHeaders() {
   const id = await getIdentity();
   if (!id.username || !id.userId) return null;
-  const serverPub = await getServerPub();
-  const { ts, proof } = await computeProof(id.privateJwk, serverPub, id.userId);
+  const [serverPub, nonce] = await Promise.all([
+    getServerPub(),
+    fetchNonce(id.userId),
+  ]);
+  const { ts, proof } = await computeProof(id.privateJwk, serverPub, id.userId, nonce);
   return {
     "X-User-Id": id.userId,
     "X-Auth-Ts": String(ts),
+    "X-Auth-Nonce": nonce,
     "X-Auth-Proof": proof,
   };
 }
@@ -244,8 +262,8 @@ async function authHeaders() {
 async function claimUsername(username) {
   const id = await getIdentity();
   const userId = await deriveUserId(id.publicJwk);
-  const serverPub = await getServerPub();
-  const { ts, proof } = await computeProof(id.privateJwk, serverPub, userId);
+  const [serverPub, nonce] = await Promise.all([getServerPub(), fetchNonce(userId)]);
+  const { ts, proof } = await computeProof(id.privateJwk, serverPub, userId, nonce);
   await api("/api/users", {
     method: "POST",
     body: JSON.stringify({
@@ -253,6 +271,7 @@ async function claimUsername(username) {
       publicKey: JSON.stringify(id.publicJwk),
       userId,
       ts,
+      nonce,
       proof,
     }),
   });
@@ -352,7 +371,10 @@ function updateTTLDesc() {
 }
 
 async function depositUndeposited() {
-  const pending = keyRecords.filter((k) => !k.depositedAt);
+  const now = Date.now();
+  const pending = keyRecords.filter(
+    (k) => !k.depositedAt || (k.expiresAt && k.expiresAt <= now)
+  );
   if (!pending.length) return 0;
   await api("/api/pool/deposit", {
     method: "POST",
@@ -364,7 +386,6 @@ async function depositUndeposited() {
       })),
     }),
   });
-  const now = Date.now();
   const expiresAt = now + depositTTLSeconds() * 1000;
   for (const k of pending) {
     k.depositedAt = now;
@@ -511,7 +532,7 @@ async function storeReplyKey(bottleId, pair) {
   });
 }
 
-async function dropBottle() {
+async function dropBottle(retried = false) {
   const text = messageEl.value.trim();
   if (!text) {
     log("message is empty", "warn");
@@ -565,18 +586,26 @@ async function dropBottle() {
     envelopes.push(env);
   }
 
-  await api("/api/bottles", {
-    method: "POST",
-    body: JSON.stringify({
-      id: bottleId,
-      createdAt: Date.now(),
-      depth: 1,
-      maxDeliveries: envelopes.length,
-      payloadIv: bytesToB64(payloadIV),
-      ciphertext: bytesToB64(new Uint8Array(ciphertext)),
-      envelopes,
-    }),
-  });
+  try {
+    await api("/api/bottles", {
+      method: "POST",
+      body: JSON.stringify({
+        id: bottleId,
+        createdAt: Date.now(),
+        depth: 1,
+        maxDeliveries: envelopes.length,
+        payloadIv: bytesToB64(payloadIV),
+        ciphertext: bytesToB64(new Uint8Array(ciphertext)),
+        envelopes,
+      }),
+    });
+  } catch (e) {
+    if (e.data?.error === "blocked_key_conflict" && !retried) {
+      log("some recipients are blocked; refetching pool keys", "warn");
+      return dropBottle(true);
+    }
+    throw e;
+  }
 
   await storeSentRecord(bottleId, {
     id: bottleId,
@@ -851,9 +880,10 @@ async function checkBottles() {
           claim,
           caughtAt: Date.now(),
         }).catch(() => {});
-        if ((bottle.depth || 1) >= MAX_THREAD_DEPTH && bottle.parentId) {
-          await idbDelete(META_STORE, `${REPLY_PREFIX}${bottle.parentId}`).catch(() => {});
-        }
+        // note: reply keys are NOT burned at max depth — reply:<parentId>
+        // decrypts every reply addressed to that parent (all same depth),
+        // so sibling replies may still need it. Depth-20 bottles carry no
+        // reply address of their own, so threads cannot grow past the cap.
         if (claim?.ok !== false) {
           caughtThisSession.add(bottle.id);
         }

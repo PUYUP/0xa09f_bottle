@@ -51,22 +51,35 @@ identity key; `user.id` is derived deterministically from the public key
 (`u_` + first 16 bytes of `SHA-256(x || y)`, hex), so the same key always maps
 to the same user.
 
-**Proof-of-possession** — every authenticated request carries headers:
+**Proof-of-possession with one-time nonce** — every authenticated request
+carries headers:
 
 ```
 X-User-Id:    <user id>
 X-Auth-Ts:    <unix seconds>
-X-Auth-Proof: base64( SHA-256( ecdhShared || utf8(userId) || utf8(str(ts)) ) )
+X-Auth-Nonce: <nonce>
+X-Auth-Proof: base64( SHA-256( ecdhShared || utf8(userId) || utf8(str(ts)) || utf8(nonce) ) )
 ```
 
 `ecdhShared` = `ECDH(userPrivateKey, serverPublicKey)` (32 bytes). The server
 recomputes `ECDH(serverPrivateKey, userPublicKey)` and compares hashes in
-constant time; timestamps older/newer than ±300s are rejected. The server's
-static public key is public: `GET /api/auth/server-key`.
+constant time; timestamps older/newer than ±300s are rejected.
+
+Before each authenticated request the client must obtain a nonce:
+
+- `POST /api/auth/nonce` — `{ "userId" }` → `{ "nonce", "expiresIn": 600 }`.
+  Unauthenticated by design (a nonce alone proves nothing). The nonce is
+  stored in Redis with a 10-minute TTL.
+- The server atomically consumes it (`GETDEL`) when verifying the request —
+  **each nonce works exactly once**, so a captured proof tuple can never be
+  replayed. Register (`POST /api/users`) consumes its nonce the same way via
+  a `nonce` field in the JSON body.
+
+The server's static public key is public: `GET /api/auth/server-key`.
 
 Endpoints:
 
-- `POST /api/users` — `{ "username", "publicKey", "userId", "ts", "proof" }` → registers/claims a username for an identity key (proof verified against the submitted key; re-registering the same key is idempotent)
+- `POST /api/users` — `{ "username", "publicKey", "userId", "ts", "nonce", "proof" }` → registers/claims a username for an identity key (proof + nonce verified against the submitted key; re-registering the same key is idempotent)
 - `GET /api/me` — auth headers → own profile
 - `GET /api/users/:id` — public profile `{id, username}`
 - `POST /api/users/:id/block` `{ "reason"? }` — auth headers; blocked users' pool keys are **excluded from your `/api/pool/fetch` results** so their keys never receive your bottles

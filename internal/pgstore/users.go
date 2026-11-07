@@ -163,11 +163,40 @@ func (p *PGStore) ReportUser(ctx context.Context, reporterID, reportedID, reason
 	return err
 }
 
+// BlockedKidsAmong returns which of the given kids are owned by users
+// blocked by userID — used to reject bottle creation server-side so block
+// enforcement does not depend on the client fetching anonymously.
+func (p *PGStore) BlockedKidsAmong(ctx context.Context, userID string, kids []string) ([]string, error) {
+	if len(kids) == 0 {
+		return nil, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+SELECT DISTINCT uk.kid
+FROM user_keys uk
+JOIN blocked_users b ON b.blocked_user_id = uk.user_id
+WHERE b.user_id = $1 AND uk.kid = ANY($2)`, userID, kids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var kid string
+		if err := rows.Scan(&kid); err != nil {
+			return nil, err
+		}
+		out = append(out, kid)
+	}
+	return out, rows.Err()
+}
+
 // ReportBottle files a UGC report against a bottle. reporterID may be ""
-// for anonymous reports; one report per (bottle, reporter) pair.
+// for anonymous reports; anonymous reporters get a unique synthetic id so
+// their reports never overwrite each other. Authenticated reporters keep
+// one upserted row per (bottle, reporter).
 func (p *PGStore) ReportBottle(ctx context.Context, bottleID, reporterID, reason string) error {
 	_, err := p.pool.Exec(ctx, `INSERT INTO reported_bottles (bottle_id, reporter_user_id, reason, created_at)
-		VALUES ($1,$2,$3,$4)
+		VALUES ($1, CASE WHEN $2 = '' THEN 'anon-' || gen_random_uuid()::text ELSE $2 END, $3, $4)
 		ON CONFLICT (bottle_id, reporter_user_id)
 		DO UPDATE SET reason = EXCLUDED.reason, created_at = EXCLUDED.created_at`,
 		bottleID, reporterID, reason, time.Now().Unix())
