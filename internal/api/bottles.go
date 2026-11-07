@@ -215,6 +215,55 @@ func sortBottles(b []store.Bottle) {
 	})
 }
 
+type reportBottleRequest struct {
+	Reason string `json:"reason"`
+}
+
+// reportBottle files a UGC report against a bottle for moderation. Auth is
+// optional: authenticated reporters are attributed, anonymous ones stored
+// with an empty reporter id.
+func (s *Server) reportBottle(c fiber.Ctx) error {
+	if s.pg == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "reports unavailable")
+	}
+	id := c.Params("id")
+	if !validBottleID(id) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid bottle id")
+	}
+	var req reportBottleRequest
+	if len(c.Body()) > 0 {
+		if err := bindJSON(c, &req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+		}
+	}
+	req.Reason = strings.TrimSpace(req.Reason)
+	if len(req.Reason) > 1000 {
+		return fiber.NewError(fiber.StatusBadRequest, "reason too long")
+	}
+	exists := false
+	if _, err := s.store.GetBottle(c.Context(), id); err == nil {
+		exists = true
+	}
+	if !exists {
+		pgExists, err := s.pg.BottleExists(c.Context(), id)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "lookup failed")
+		}
+		exists = pgExists
+	}
+	if !exists {
+		return fiber.NewError(fiber.StatusNotFound, "bottle not found")
+	}
+	reporter := ""
+	if user, ok := s.authUser(c); ok {
+		reporter = user.ID
+	}
+	if err := s.pg.ReportBottle(c.Context(), id, reporter, req.Reason); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "report failed")
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"ok": true})
+}
+
 type pickupRequest struct {
 	KID         string `json:"kid"`
 	PickupToken string `json:"pickupToken,omitempty"`

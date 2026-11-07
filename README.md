@@ -73,6 +73,8 @@ Endpoints:
 - `DELETE /api/users/:id/block` — remove a block
 - `GET /api/me/blocks` — list blocked users
 - `POST /api/users/:id/report` `{ "reason" }` — file a report for moderation
+- `POST /api/bottles/:id/report` `{ "reason"? }` — report a bottle/message for moderation (UGC compliance); auth optional, anonymous reports stored with empty reporter id. Rate-limited, bottle must exist.
+- `GET /api/users/by-username/:username` — resolve username → `{id, username}` for block/report targeting
 - `POST /api/pool/deposit` — send the same auth headers to attribute deposited kids to your account (`user_keys` table); anonymous deposits still work
 - `POST /api/pool/fetch` — auth headers enable block enforcement; anonymous fetch works but ignores blocks
 

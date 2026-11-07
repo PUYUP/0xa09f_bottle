@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS reported_users (
   CHECK (reported_by_user_id <> reported_user_id)
 );
 CREATE INDEX IF NOT EXISTS reported_users_reported_idx ON reported_users (reported_user_id);
+
+CREATE TABLE IF NOT EXISTS reported_bottles (
+  bottle_id         TEXT NOT NULL,
+  reporter_user_id  TEXT NOT NULL DEFAULT '',
+  reason            TEXT NOT NULL DEFAULT '',
+  created_at        BIGINT NOT NULL,
+  PRIMARY KEY (bottle_id, reporter_user_id)
+);
+CREATE INDEX IF NOT EXISTS reported_bottles_created_idx ON reported_bottles (created_at DESC);
 `
 
 type PGStore struct {

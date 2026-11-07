@@ -437,14 +437,21 @@ async function importECDHPrivate(jwk) {
   );
 }
 
-async function derivePickupProof(rawSessionKey, bottleId) {
+// derivePickupProof binds the pickup proof to (sessionKey, bottleId, kid).
+// kid may be omitted to reproduce the legacy v1 proof for bottles created
+// before kid-binding existed.
+async function derivePickupProof(rawSessionKey, bottleId, kid = "") {
   const keyBytes = new Uint8Array(rawSessionKey);
   const bottleBytes = enc.encode(bottleId);
-  const tagBytes = enc.encode("a09f-pickup-v1");
-  const combined = new Uint8Array(keyBytes.length + bottleBytes.length + tagBytes.length);
+  const kidBytes = enc.encode(kid);
+  const tagBytes = enc.encode(kid ? "a09f-pickup-v2" : "a09f-pickup-v1");
+  const combined = new Uint8Array(
+    keyBytes.length + bottleBytes.length + kidBytes.length + tagBytes.length
+  );
   combined.set(keyBytes, 0);
   combined.set(bottleBytes, keyBytes.length);
-  combined.set(tagBytes, keyBytes.length + bottleBytes.length);
+  combined.set(kidBytes, keyBytes.length + bottleBytes.length);
+  combined.set(tagBytes, keyBytes.length + bottleBytes.length + kidBytes.length);
   const tokenBuf = await crypto.subtle.digest("SHA-256", combined);
   const token = bytesToB64(new Uint8Array(tokenBuf));
   const hashBuf = await crypto.subtle.digest("SHA-256", enc.encode(token));
@@ -452,7 +459,7 @@ async function derivePickupProof(rawSessionKey, bottleId) {
   return { token, hash };
 }
 
-async function wrapSessionKey(bottleId, recipientPublicKeyJwk, rawSessionKey) {
+async function wrapSessionKey(bottleId, recipientPublicKeyJwk, rawSessionKey, kid) {
   const authorPair = await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     true,
@@ -468,7 +475,7 @@ async function wrapSessionKey(bottleId, recipientPublicKeyJwk, rawSessionKey) {
   const iv = randBytes(12);
   const wrapped = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, wrapKey, rawSessionKey);
   const authorPublicJwk = await crypto.subtle.exportKey("jwk", authorPair.publicKey);
-  const { hash: pickupHash } = await derivePickupProof(rawSessionKey, bottleId);
+  const { hash: pickupHash } = await derivePickupProof(rawSessionKey, bottleId, kid);
   return {
     kid: null,
     authorPublicKey: JSON.stringify(authorPublicJwk),
@@ -549,7 +556,7 @@ async function dropBottle() {
   const envelopes = [];
   for (const pk of poolKeys) {
     const recipientJwk = JSON.parse(pk.publicKey);
-    const env = await wrapSessionKey(bottleId, recipientJwk, rawSessionKey);
+    const env = await wrapSessionKey(bottleId, recipientJwk, rawSessionKey, pk.kid);
     env.kid = pk.kid;
     envelopes.push(env);
   }
@@ -608,7 +615,7 @@ async function replyBottle(parent, parentPlain, text) {
     enc.encode(encodePlaintext(text, replyJwk))
   );
   const rawSessionKey = await crypto.subtle.exportKey("raw", sessionKey);
-  const env = await wrapSessionKey(bottleId, parentPlain.reply, rawSessionKey);
+  const env = await wrapSessionKey(bottleId, parentPlain.reply, rawSessionKey, `${REPLY_PREFIX}${parent.id}`);
   env.kid = `${REPLY_PREFIX}${parent.id}`;
   await api("/api/bottles", {
     method: "POST",
@@ -693,18 +700,36 @@ function createMessageNode(rec, orphan = false, sentIds = null) {
   body.textContent = plain.text;
 
   node.append(head, body);
+  const actions = document.createElement("div");
+  actions.className = "msg-actions";
+  if (claim?.status !== "SENT") {
+    const reportBtn = document.createElement("button");
+    reportBtn.className = "btn small";
+    reportBtn.textContent = "[ report ]";
+    reportBtn.addEventListener("click", () => {
+      const reason = prompt("report reason (optional)") || "";
+      api(`/api/bottles/${encodeURIComponent(bottle.id)}/report`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
+      })
+        .then(() => log(`reported bottle ${bottle.id.slice(0, 8)}`))
+        .catch((e) => log(`report: ${e.message}`, "err"));
+    });
+    actions.appendChild(reportBtn);
+  }
   const depth = bottle.depth || 1;
   if (plain.reply && depth < MAX_THREAD_DEPTH && claim?.status !== "SENT" && !sentIds?.has(bottle.id)) {
     const btn = document.createElement("button");
-    btn.className = "btn";
+    btn.className = "btn small";
     btn.textContent = "[ reply ]";
     btn.addEventListener("click", () => {
       const text = prompt("reply message");
       if (!text?.trim()) return;
       replyBottle(bottle, plain, text.trim()).catch((e) => log(`reply: ${e.message}`, "err"));
     });
-    node.appendChild(btn);
+    actions.appendChild(btn);
   }
+  if (actions.children.length) node.appendChild(actions);
   return node;
 }
 
@@ -796,12 +821,22 @@ async function checkBottles() {
       try {
         const rawSession = await unwrapSessionKey(bottle, envelope, record);
         const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
-        const { token: pickupToken } = await derivePickupProof(rawSession, bottle.id);
+        const { token: pickupToken } = await derivePickupProof(rawSession, bottle.id, envelope.kid);
         let claim = null;
         try {
           claim = await claimBottle(bottle.id, envelope.kid, pickupToken);
         } catch (e) {
-          claim = { ok: false, error: e.message };
+          if (e.message === "invalid_token") {
+            // legacy v1 bottles: proof was not bound to kid
+            const legacy = await derivePickupProof(rawSession, bottle.id);
+            try {
+              claim = await claimBottle(bottle.id, envelope.kid, legacy.token);
+            } catch (e2) {
+              claim = { ok: false, error: e2.message };
+            }
+          } else {
+            claim = { ok: false, error: e.message };
+          }
         }
         await idbPut(META_STORE, {
           id: `caught:${bottle.id}`,
@@ -1122,6 +1157,16 @@ async function renderAccount() {
   }
 }
 
+const RANDOM_NAME_A = ["drifter","nomad","cipher","static","void","paper","salt","ember","foghorn","meridian","packet","quiet","rust","tide","umbra"];
+const RANDOM_NAME_B = ["fox","whale","monk","engine","letter","sparrow","vault","signal","anchor","drift","cipher","field","harbor","lantern","current","moth"];
+
+function randomUsername() {
+  const a = RANDOM_NAME_A[Math.floor(Math.random() * RANDOM_NAME_A.length)];
+  const b = RANDOM_NAME_B[Math.floor(Math.random() * RANDOM_NAME_B.length)];
+  const n = Math.floor(Math.random() * 900 + 100);
+  return `${a}_${b}${n}`;
+}
+
 async function claimUsernameFromUI() {
   const input = $("username-input");
   const username = input.value.trim();
@@ -1191,6 +1236,9 @@ async function init() {
   $("btn-pool").addEventListener("click", () => togglePoolPanel().catch((e) => log(`pool: ${e.message}`, "err")));
   $("btn-account").addEventListener("click", () => toggleAccountPanel().catch((e) => log(`account: ${e.message}`, "err")));
   $("btn-claim").addEventListener("click", () => claimUsernameFromUI().catch((e) => log(`claim: ${e.message}`, "err")));
+  $("btn-random-name").addEventListener("click", () => {
+    $("username-input").value = randomUsername();
+  });
   $("btn-block").addEventListener("click", () => blockOrReport("block").catch((e) => log(`block: ${e.message}`, "err")));
   $("btn-report").addEventListener("click", () => blockOrReport("report").catch((e) => log(`report: ${e.message}`, "err")));
   statusEl.addEventListener("click", (e) => {

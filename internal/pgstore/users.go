@@ -162,3 +162,21 @@ func (p *PGStore) ReportUser(ctx context.Context, reporterID, reportedID, reason
 		reporterID, reportedID, reason, time.Now().Unix())
 	return err
 }
+
+// ReportBottle files a UGC report against a bottle. reporterID may be ""
+// for anonymous reports; one report per (bottle, reporter) pair.
+func (p *PGStore) ReportBottle(ctx context.Context, bottleID, reporterID, reason string) error {
+	_, err := p.pool.Exec(ctx, `INSERT INTO reported_bottles (bottle_id, reporter_user_id, reason, created_at)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (bottle_id, reporter_user_id)
+		DO UPDATE SET reason = EXCLUDED.reason, created_at = EXCLUDED.created_at`,
+		bottleID, reporterID, reason, time.Now().Unix())
+	return err
+}
+
+// BottleExists reports whether a bottle id is present in the archive.
+func (p *PGStore) BottleExists(ctx context.Context, id string) (bool, error) {
+	var exists bool
+	err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bottles WHERE id = $1)`, id).Scan(&exists)
+	return exists, err
+}

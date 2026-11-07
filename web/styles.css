@@ -326,3 +326,9 @@ h2 {
   padding: 3px 10px;
   font-size: 11px;
 }
+
+.msg-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
