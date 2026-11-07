@@ -63,7 +63,7 @@ export default function App() {
           <span className="text-blue-900">🌊</span> saltleak
         </h1>
         <p className="text-xs italic text-neutral-700">
-          anonymous e2ee messages lost in the void — est. 2025
+          A quiet room for a crowded mind — est. 2025
         </p>
         <hr className="retro-hr" />
       </div>
