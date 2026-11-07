@@ -833,10 +833,35 @@ async function renderInbox() {
   const sentIds = new Set(recs.filter(isSentRecord).map((r) => r.bottle.id));
   inboxEl.innerHTML = "";
   if (!roots.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "no messages yet";
-    inboxEl.appendChild(empty);
+    if (!keyRecords.length && !identityRecord?.username) {
+      const welcome = document.createElement("div");
+      welcome.className = "panel";
+      welcome.innerHTML = `
+        <div class="welcome-title">welcome to the sea</div>
+        <p class="hint">Messages here are sealed with E2EE — only the sender and the intended recipient can ever read them. To start receiving, throw some bait: deposit your public keys into the blind pool.</p>
+        <ol class="welcome-steps">
+          <li><b>[ generate + deposit keys ]</b> — publish a keypair to the pool (max ${MAX_LOCAL_KEYS})</li>
+          <li><b>[ account ]</b> — claim a username to enable blocking &amp; reporting</li>
+          <li><b>[ drop bottle ]</b> a message, or wait for the current sea to wash one your way — then <b>[ check bottles ]</b></li>
+        </ol>
+        <div class="welcome-actions">
+          <button class="btn primary" data-welcome="keys">[ throw bait ]</button>
+          <button class="btn" data-welcome="account">[ claim username ]</button>
+          <button class="btn" data-welcome="check">[ check bottles ]</button>
+        </div>`;
+      welcome.querySelectorAll("[data-welcome]").forEach((b) =>
+        b.addEventListener("click", () => {
+          const id = { keys: "btn-keys", account: "btn-account", check: "btn-check" }[b.dataset.welcome];
+          $(id)?.click();
+        })
+      );
+      inboxEl.appendChild(welcome);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "empty";
+      empty.textContent = "no messages yet";
+      inboxEl.appendChild(empty);
+    }
     return;
   }
   for (const r of roots) inboxEl.appendChild(buildThreadEl(r, childrenOf, !!r.bottle.parentId, sentIds));

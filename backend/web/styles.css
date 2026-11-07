@@ -96,6 +96,26 @@ h1 {
   gap: 8px;
 }
 
+.welcome-title {
+  font-weight: 700;
+  font-size: 15px;
+  margin-bottom: 6px;
+}
+
+.welcome-steps {
+  margin: 8px 0 12px;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-dim, #666);
+}
+
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .btn {
   appearance: none;
   border: 1px solid var(--acc);

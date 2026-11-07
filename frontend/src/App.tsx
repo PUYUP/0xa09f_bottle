@@ -156,7 +156,54 @@ export default function App() {
       {showAccount && <AccountPanel onClose={() => setShowAccount(false)} />}
 
       <section className="space-y-3">
-        {threads.length === 0 && <div className="text-neutral-600">no messages yet</div>}
+        {threads.length === 0 &&
+          (state.keys.length === 0 && !identity?.username ? (
+            <div className="rounded border border-neutral-800 bg-neutral-900/50 p-4">
+              <div className="mb-2 text-sm font-semibold text-neutral-200">welcome to the sea</div>
+              <p className="mb-3 text-[12px] leading-relaxed text-neutral-500">
+                Messages here are sealed with E2EE — only the sender and the intended recipient can
+                ever read them. To start receiving, throw some bait: deposit your public keys into
+                the blind pool. Anyone can then seal a message to your keys.
+              </p>
+              <ol className="mb-3 list-decimal space-y-1 pl-5 text-[12px] text-neutral-400">
+                <li>
+                  <span className="text-neutral-300">[ + key ]</span> — generate a keypair and
+                  deposit the public half into the pool (max {MAX_LOCAL_KEYS})
+                </li>
+                <li>
+                  <span className="text-neutral-300">[ account ]</span> — claim a username to enable
+                  blocking &amp; reporting
+                </li>
+                <li>
+                  <span className="text-neutral-300">[ drop ]</span> a message, or wait for the
+                  current sea to wash one your way — then{" "}
+                  <span className="text-neutral-300">[ check bottles ]</span>
+                </li>
+              </ol>
+              <div className="flex gap-2">
+                <button
+                  className="rounded border border-emerald-800 px-3 py-1.5 text-[12px] text-emerald-300 hover:bg-emerald-950"
+                  onClick={() => run(() => generateAndDeposit(ttl))}
+                >
+                  [ throw bait ]
+                </button>
+                <button
+                  className="rounded border border-neutral-800 px-3 py-1.5 text-[12px] text-neutral-300 hover:border-neutral-600"
+                  onClick={() => setShowAccount(true)}
+                >
+                  [ claim username ]
+                </button>
+                <button
+                  className="rounded border border-neutral-800 px-3 py-1.5 text-[12px] text-neutral-400 hover:border-neutral-600"
+                  onClick={() => run(checkBottles)}
+                >
+                  [ check bottles ]
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-neutral-600">no messages yet</div>
+          ))}
         <ThreadList roots={threads} />
       </section>
 
