@@ -7,6 +7,7 @@ import {
   buildThreads,
   checkBottles,
   dropBottle,
+  formatTTL,
   generateAndDeposit,
   init,
   log,
@@ -18,7 +19,8 @@ import type { ThreadNode } from "./lib/store";
 export default function App() {
   const state = useApp();
   const [message, setMessage] = useState("");
-  const [ttl, setTtl] = useState("86400");
+  const [baitTtl, setBaitTtl] = useState("86400");
+  const [baitDialog, setBaitDialog] = useState(false);
   const [page, setPage] = useState<"catch" | "pool" | "bait" | "account">("catch");
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [threadLimit, setThreadLimit] = useState(10);
@@ -45,8 +47,18 @@ export default function App() {
     };
   }, [state.records, state.ready]);
 
-  const ttlValid = readTTLSeconds(ttl);
+  const ttlValid = readTTLSeconds(baitTtl);
   const isNewUser = state.keys.length === 0 && !identity?.username;
+
+  const openBaitDialog = () => setBaitDialog(true);
+  const confirmBait = () => {
+    if (!ttlValid) {
+      log("invalid ttl — pick a number of seconds", "warn");
+      return;
+    }
+    setBaitDialog(false);
+    run(() => generateAndDeposit(baitTtl));
+  };
 
   const run = (fn: () => Promise<void>) => {
     setBusy(true);
@@ -92,7 +104,7 @@ export default function App() {
           <button
             className="retro-tool"
             disabled={busy}
-            onClick={() => run(() => generateAndDeposit(ttl))}
+            onClick={openBaitDialog}
             title="generate a keypair and publish the public half to the bait pool"
           >
             <span className="retro-tool-icon">🎣</span>
@@ -152,7 +164,7 @@ export default function App() {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   run(async () => {
-                    await dropBottle(message, ttl);
+                    await dropBottle(message, "86400");
                     setMessage("");
                   });
                 }
@@ -163,7 +175,7 @@ export default function App() {
               disabled={busy}
               onClick={() =>
                 run(async () => {
-                  await dropBottle(message, ttl);
+                  await dropBottle(message, "86400");
                   setMessage("");
                 })
               }
@@ -171,17 +183,6 @@ export default function App() {
               🎣<br />
               cast it
             </button>
-          </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px] text-neutral-700">
-            <label>bait ttl (seconds):</label>
-            <input
-              className="retro-input w-24"
-              value={ttl}
-              onChange={(e) => setTtl(e.target.value)}
-            />
-            <span>
-              {ttlValid ? `floats for ~${Math.round(ttlValid / 3600)}h` : "invalid ttl"}
-            </span>
           </div>
         </div>
       </div>
@@ -209,7 +210,7 @@ export default function App() {
                 <p className="mb-2">To start catching, throw some bait:</p>
                 <ol className="mb-3 list-decimal pl-6">
                   <li>
-                    <span className="retro-link" onClick={() => run(() => generateAndDeposit(ttl))}>
+                    <span className="retro-link" onClick={openBaitDialog}>
                       🎣 throw bait
                     </span>{" "}
                     — generate a keypair and publish the public half into the bait pool
@@ -274,6 +275,63 @@ export default function App() {
           ))}
         </div>
       </div>
+
+      {/* ── throw bait dialog ──────────────────────────────── */}
+      {baitDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setBaitDialog(false)}
+        >
+          <div className="bevel w-80" onClick={(e) => e.stopPropagation()}>
+            <div className="retro-titlebar">
+              <span>🎣 throw bait</span>
+              <button className="retro-btn" style={{ padding: "0 6px" }} onClick={() => setBaitDialog(false)}>✕</button>
+            </div>
+            <div className="retro-body space-y-2 text-[14px]">
+              <p className="text-neutral-700">
+                publish a fresh keypair into the bait pool so strangers can cast sealed catches to it.
+              </p>
+              <label className="block text-[13px] text-neutral-600">
+                bait ttl (seconds) — how long the key stays catchable:
+              </label>
+              <div className="flex items-center gap-1">
+                <button
+                  className="retro-btn"
+                  style={{ padding: "2px 8px" }}
+                  onClick={() => setBaitTtl((v) => String(Math.max(60, (Number(v) || 0) - 3600)))}
+                  title="-1 hour"
+                >
+                  −
+                </button>
+                <input
+                  className="retro-input w-full text-center"
+                  value={baitTtl}
+                  onChange={(e) => setBaitTtl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && confirmBait()}
+                  autoFocus
+                />
+                <button
+                  className="retro-btn"
+                  style={{ padding: "2px 8px" }}
+                  onClick={() => setBaitTtl((v) => String((Number(v) || 0) + 3600))}
+                  title="+1 hour"
+                >
+                  +
+                </button>
+              </div>
+              <p className="text-[13px] text-neutral-600">
+                {ttlValid ? formatTTL(ttlValid) : "invalid — enter seconds (60–2592000)"}
+              </p>
+              <div className="flex justify-end gap-2">
+                <button className="retro-btn" onClick={() => setBaitDialog(false)}>cancel</button>
+                <button className="retro-btn" onClick={confirmBait} disabled={!ttlValid}>
+                  throw it
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <p className="mt-3 text-center text-[13px] text-neutral-600">
         saltleak · best viewed at 800×600 · works in netscape navigator · no cookies were harmed
