@@ -14,7 +14,7 @@ import {
   unwrapSessionKey,
   wrapSessionKey,
 } from "./crypto";
-import { idbDelete, idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
+import { idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
 import { claimUsername, deriveUserId, getIdentity, getIdentityRecord, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
@@ -190,12 +190,9 @@ export async function generateAndDeposit(ttlRaw: string) {
   const n = await depositUndeposited(ttlRaw);
   const capLabel = Number.isFinite(MAX_LOCAL_KEYS) ? `/${MAX_LOCAL_KEYS}` : "";
   log(`generated key material; deposited ${n} blind public key(s) (${inPool + n}${capLabel} in pool)`);
-  await deliverPendingBottles();
 }
 
 // ---------- bottles ----------
-
-const PENDING_PREFIX = "pending:";
 
 export async function dropBottle(text: string, ttlRaw: string, retried = false) {
   const trimmed = text.trim();
@@ -203,27 +200,28 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     log("message is empty", "warn");
     return;
   }
-  // Best-effort pool fetch — casting into the void is allowed even with zero
-  // recipients; open delivery slots are filled later by deliverPendingBottles.
-  let poolKeys: { kid: string; publicKey: string }[] = [];
-  try {
-    const { size = 0 } = await api<{ size?: number }>("/api/pool/kids?limit=1", { auth: false });
-    if (size > 0) {
-      const fetched = await api<{ keys?: { kid: string; publicKey: string }[] }>("/api/pool/fetch", {
-        method: "POST",
-        body: JSON.stringify({
-          count: BOTTLE_QUOTA,
-          exclude: state.keys.map((k) => k.kid),
-        }),
-      });
-      const byKid = keyByKidMap();
-      poolKeys = (fetched.keys || []).filter((pk) => !byKid.has(pk.kid));
-      if (!poolKeys.length && (fetched.keys || []).length > 0) {
-        log("all fetched keys belong to this device; generate keys on another device", "warn");
-      }
+  const { size = 0 } = await api<{ size?: number }>("/api/pool/kids?limit=1", { auth: false }).catch(() => ({ size: 0 }));
+  if (size < 1) {
+    log("bait pool is empty; throw bait first", "err");
+    return;
+  }
+  const fetched = await api<{ keys?: { kid: string; publicKey: string }[] }>("/api/pool/fetch", {
+    method: "POST",
+    body: JSON.stringify({
+      count: BOTTLE_QUOTA,
+      exclude: state.keys.map((k) => k.kid),
+    }),
+  });
+  const allPoolKeys = fetched.keys || [];
+  const byKid = keyByKidMap();
+  const poolKeys = allPoolKeys.filter((pk) => !byKid.has(pk.kid));
+  if (poolKeys.length < 1) {
+    if (allPoolKeys.length > 0) {
+      log("all fetched keys belong to this device; generate keys on another device", "warn");
+    } else {
+      log("bait pool returned no keys; throw more bait and retry", "err");
     }
-  } catch {
-    // pool unreachable — still cast into the void
+    return;
   }
 
   const bottleId = crypto.randomUUID();
@@ -257,12 +255,11 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
   const selfEnv = await wrapSessionKey(bottleId, identity.publicJwk, rawSessionKey, selfKid);
   selfEnv.kid = selfKid;
 
-  const maxDeliveries = BOTTLE_QUOTA;
   const bottle: Bottle = {
     id: bottleId,
     createdAt: Date.now(),
     depth: 1,
-    maxDeliveries,
+    maxDeliveries: envelopes.length,
     payloadIv: bytesToB64(payloadIV),
     ciphertext: bytesToB64(new Uint8Array(ciphertext)),
     envelopes: [...envelopes, selfEnv],
@@ -285,80 +282,11 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     id: bottleId,
     createdAt: Date.now(),
     depth: 1,
-    maxDeliveries,
+    maxDeliveries: envelopes.length,
     status: "ACTIVE",
   }, { v: 1, text: trimmed, reply: replyPair.publicJwk }, "");
-
-  const openSlots = maxDeliveries - envelopes.length;
-  if (openSlots > 0) {
-    // Keep the session key locally so open slots can be filled later when
-    // the pool has fresh keys — "cast into the void, deliver later".
-    await idbPut(META_STORE, {
-      id: `${PENDING_PREFIX}${bottleId}`,
-      sessionKey: bytesToB64(new Uint8Array(rawSessionKey)),
-      kids: envelopes.map((e) => e.kid as string),
-      createdAt: Date.now(),
-    });
-    log(`cast ${bottleId.slice(0, 8)} into the void — ${openSlots} delivery slot(s) open`);
-  } else {
-    log(`dropped bottle ${bottleId} to ${envelopes.length} blind recipients`);
-  }
   await renderInbox();
-}
-
-interface PendingCast {
-  id: string;
-  sessionKey?: string;
-  kids?: string[];
-}
-
-// deliverPendingBottles tops up open delivery slots on previously cast
-// bottles using whatever fresh pool keys are available right now.
-export async function deliverPendingBottles() {
-  const metas = (await idbGetAll<PendingCast>(META_STORE).catch(() => [])) as PendingCast[];
-  const pendings = metas.filter((m) => typeof m.id === "string" && m.id.startsWith(PENDING_PREFIX));
-  if (!pendings.length) return;
-  const byKid = keyByKidMap();
-  const ownKids = state.keys.map((k) => k.kid);
-  for (const p of pendings) {
-    const bottleId = p.id.slice(PENDING_PREFIX.length);
-    const kids = p.kids || [];
-    const remaining = BOTTLE_QUOTA - kids.length;
-    if (remaining <= 0 || !p.sessionKey) {
-      await idbDelete(META_STORE, p.id).catch(() => {});
-      continue;
-    }
-    try {
-      const fetched = await api<{ keys?: { kid: string; publicKey: string }[] }>("/api/pool/fetch", {
-        method: "POST",
-        body: JSON.stringify({ count: remaining, exclude: [...kids, ...ownKids] }),
-      });
-      const fresh = (fetched.keys || [])
-        .filter((pk) => !kids.includes(pk.kid) && !byKid.has(pk.kid))
-        .slice(0, remaining);
-      if (!fresh.length) continue;
-      const rawSessionKey = b64ToBytes(p.sessionKey).buffer as ArrayBuffer;
-      const envs = [];
-      for (const pk of fresh) {
-        const env = await wrapSessionKey(bottleId, JSON.parse(pk.publicKey) as JWK, rawSessionKey, pk.kid);
-        env.kid = pk.kid;
-        envs.push(env);
-      }
-      await api(`/api/bottles/${bottleId}/envelopes`, {
-        method: "POST",
-        body: JSON.stringify({ envelopes: envs }),
-      });
-      const merged = [...kids, ...envs.map((e) => e.kid as string)];
-      if (merged.length >= BOTTLE_QUOTA) {
-        await idbDelete(META_STORE, p.id).catch(() => {});
-      } else {
-        await idbPut(META_STORE, { ...p, kids: merged });
-      }
-      log(`delivered ${envs.length} late envelope(s) for cast ${bottleId.slice(0, 8)}`);
-    } catch (e) {
-      log(`pending deliver ${bottleId.slice(0, 8)}: ${(e as Error).message}`, "warn");
-    }
-  }
+  log(`dropped bottle ${bottleId} to ${envelopes.length} blind recipients`);
 }
 
 export async function replyBottle(parent: ThreadRecord, text: string) {
@@ -583,7 +511,6 @@ export async function checkBottles() {
   }
   await renderInbox();
   await refreshActivePoolKeys();
-  await deliverPendingBottles();
   log(`checked ${scanned} bottle(s); caught ${caught}`);
 }
 

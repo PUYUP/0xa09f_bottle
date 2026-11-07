@@ -69,12 +69,11 @@ func validateBottle(b store.Bottle) error {
 	if b.ParentID != "" && (len(b.ParentID) > 128 || !validBottleID(b.ParentID)) {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid parentId")
 	}
-	// Envelopes may be fewer than maxDeliveries: a bottle cast while the pool
-	// is sparse (or empty) starts with only the self archive envelope, and
-	// recipient envelopes are appended later via POST /:id/envelopes.
-	// Upper bound: maxDeliveries recipients + 1 self envelope.
-	if len(b.Envelopes) < 1 || len(b.Envelopes) > b.MaxDeliveries+1 {
-		return fiber.NewError(fiber.StatusBadRequest, "envelope count out of range")
+	// Envelopes may exceed maxDeliveries by one: clients append a self-addressed
+	// archive envelope (kid "self:...") so sent plaintext stays recoverable.
+	// It never claims a delivery slot, so EXHAUSTED math is unaffected.
+	if len(b.Envelopes) != b.MaxDeliveries && len(b.Envelopes) != b.MaxDeliveries+1 {
+		return fiber.NewError(fiber.StatusBadRequest, "envelope count must equal maxDeliveries")
 	}
 	if b.PayloadIV == "" || len(b.PayloadIV) > 64 || b.Ciphertext == "" || len(b.Ciphertext) > 256*1024 {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid payload fields")
@@ -89,46 +88,6 @@ func validateBottle(b store.Bottle) error {
 		}
 	}
 	return nil
-}
-
-// appendBottleEnvelopes lets the session-key holder top up recipient
-// envelopes on an already-cast bottle — the "cast into the void, deliver
-// later" flow. Appended wraps are opaque to the server; only the original
-// sender can produce ones that actually decrypt.
-func (s *Server) appendBottleEnvelopes(c fiber.Ctx) error {
-	id := c.Params("id")
-	var body struct {
-		Envelopes []store.Envelope `json:"envelopes"`
-	}
-	if err := bindJSON(c, &body); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
-	}
-	if len(body.Envelopes) < 1 || len(body.Envelopes) > 5 {
-		return fiber.NewError(fiber.StatusBadRequest, "envelopes must contain 1..5 entries")
-	}
-	for _, env := range body.Envelopes {
-		if env.KID == "" || len(env.KID) > 128 ||
-			env.AuthorPublicKey == "" || len(env.AuthorPublicKey) > 8192 ||
-			env.WrapIV == "" || len(env.WrapIV) > 64 ||
-			env.WrappedKey == "" || len(env.WrappedKey) > 1024 ||
-			len(env.PickupHash) > 128 {
-			return fiber.NewError(fiber.StatusBadRequest, "incomplete or invalid envelope")
-		}
-	}
-	bottle, err := s.store.AppendEnvelopes(c.Context(), id, body.Envelopes)
-	if err != nil {
-		switch err {
-		case store.ErrBottleNotFound:
-			return fiber.NewError(fiber.StatusNotFound, "bottle not found")
-		case store.ErrBottleNotActive:
-			return fiber.NewError(fiber.StatusConflict, "bottle not active")
-		case store.ErrEnvelopeLimit:
-			return fiber.NewError(fiber.StatusConflict, "envelope limit reached")
-		}
-		return fiber.NewError(fiber.StatusInternalServerError, "append failed")
-	}
-	s.syncBottlePG(c.Context(), bottle)
-	return c.JSON(fiber.Map{"id": bottle.ID, "envelopes": len(bottle.Envelopes)})
 }
 
 func validBottleID(id string) bool {
