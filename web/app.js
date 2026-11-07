@@ -32,7 +32,7 @@ function log(msg, cls = "") {
 }
 
 async function api(path, options = {}) {
-  const auth = await authHeaders().catch(() => null);
+  const auth = options.auth === false ? null : await authHeaders().catch(() => null);
   const res = await fetch(path, {
     ...options,
     headers: {
@@ -377,7 +377,7 @@ async function depositUndeposited() {
 
 async function ownKeysInPool() {
   try {
-    const { kids = [] } = await api("/api/pool/kids?limit=20000");
+    const { kids = [] } = await api("/api/pool/kids?limit=20000", { auth: false });
     const pool = new Set(kids);
     ownPoolKids = new Set(keyRecords.filter((k) => pool.has(k.kid)).map((k) => k.kid));
     return ownPoolKids.size;
@@ -517,14 +517,18 @@ async function dropBottle() {
     log("message is empty", "warn");
     return;
   }
-  const { size = 0 } = await api("/api/pool/kids?limit=1").catch(() => ({ size: 0 }));
+  const { size = 0 } = await api("/api/pool/kids?limit=1", { auth: false }).catch(() => ({ size: 0 }));
   if (size < 1) {
     log("blind pool is empty; deposit keys first", "err");
     return;
   }
   const fetched = await api("/api/pool/fetch", {
     method: "POST",
-    body: JSON.stringify({ count: BOTTLE_QUOTA }),
+    body: JSON.stringify({
+      count: BOTTLE_QUOTA,
+      // keep our own keys in the pool instead of burning them on our own bottle
+      exclude: keyRecords.map((k) => k.kid),
+    }),
   });
   const allPoolKeys = fetched.keys || [];
   const poolKeys = allPoolKeys.filter((pk) => !keyByKid.has(pk.kid));
@@ -804,7 +808,8 @@ async function checkBottles() {
   let cursor = 0;
   for (let page = 0; page < 100; page++) {
     const { bottles = [], nextCursor = 0 } = await api(
-      `/api/bottles?limit=100${cursor ? `&cursor=${cursor}` : ""}`
+      `/api/bottles?limit=100${cursor ? `&cursor=${cursor}` : ""}`,
+      { auth: false }
     );
     if (!bottles.length) break;
     scanned += bottles.length;
@@ -1056,7 +1061,7 @@ async function togglePoolPanel() {
 }
 
 async function refreshPoolKeys() {
-  const { keys = [], size = 0 } = await api("/api/pool/keys?limit=200");
+  const { keys = [], size = 0 } = await api("/api/pool/keys?limit=200", { auth: false });
   $("pool-count").textContent = `(${size} in pool)`;
   const list = $("pool-keys");
   list.innerHTML = "";
@@ -1255,7 +1260,7 @@ async function init() {
     }
   });
   try {
-    await api("/api/health");
+    await api("/api/health", { auth: false });
     log("relay online");
   } catch (e) {
     log(`relay offline: ${e.message}`, "err");

@@ -61,7 +61,8 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 }
 
 type fetchRequest struct {
-	Count int `json:"count"`
+	Count   int      `json:"count"`
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 func (s *Server) fetchKeys(c fiber.Ctx) error {
@@ -77,6 +78,14 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 	if req.Count > 5 {
 		req.Count = 5
 	}
+	if len(req.Exclude) > 1000 {
+		return fiber.NewError(fiber.StatusBadRequest, "exclude too large")
+	}
+	for _, k := range req.Exclude {
+		if len(k) > 128 {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid exclude kid")
+		}
+	}
 	var exclude []string
 	if user, ok := s.authUser(c); ok {
 		if kids, err := s.pg.ListBlockedKids(c.Context(), user.ID, 10000); err == nil {
@@ -85,6 +94,7 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 			log.Printf("pg blocked kids %s: %v", user.ID, err)
 		}
 	}
+	exclude = append(exclude, req.Exclude...)
 	keys, err := s.store.FetchKeys(c.Context(), req.Count, exclude)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "fetch failed")

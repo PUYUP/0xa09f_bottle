@@ -180,7 +180,7 @@ func (p *PGStore) ListBottles(ctx context.Context, limit, offset int) ([]store.B
 	rows, err := p.pool.Query(ctx, `
 SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
-ORDER BY created_at DESC, id DESC
+ORDER BY created_at DESC, id COLLATE "C" DESC
 LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, err
@@ -211,8 +211,8 @@ func (p *PGStore) ListBottlesCursor(ctx context.Context, limit int, beforeCreate
 	query := `
 SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
-WHERE ($1 = 0 OR created_at < $1 OR (created_at = $1 AND id < $2))
-ORDER BY created_at DESC, id DESC
+WHERE ($1 = 0 OR created_at < $1 OR (created_at = $1 AND id COLLATE "C" < $2))
+ORDER BY created_at DESC, id COLLATE "C" DESC
 LIMIT $3`
 	rows, err := p.pool.Query(ctx, query, beforeCreatedAt, beforeID, limit)
 	if err != nil {

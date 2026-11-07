@@ -156,6 +156,10 @@ var depositKeysScript = redis.NewScript(`
 local items = cjson.decode(ARGV[1])
 local now = tonumber(ARGV[2])
 local maxPool = tonumber(ARGV[3])
+-- Purge expired entries first so a re-deposited kid whose old entry expired
+-- is not mistaken for an active duplicate (and cannot leave a stale member).
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
 local added = 0
 for i, it in ipairs(items) do
   if redis.call('ZSCORE', KEYS[2], it.k) == false then
@@ -164,8 +168,6 @@ for i, it in ipairs(items) do
     added = added + 1
   end
 end
-redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
-redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
 if maxPool > 0 then
   local card = redis.call('ZCARD', KEYS[1])
   if card > maxPool then
