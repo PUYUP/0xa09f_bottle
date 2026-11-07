@@ -85,18 +85,19 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
 }
 
 export function PoolPanel({ onClose }: { onClose: () => void }) {
-  const { poolKeys, poolSize } = useApp();
+  const { poolKeys, poolSize, ownPoolKids, keys } = useApp();
   const [loaded, setLoaded] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   if (!loaded) {
     setLoaded(true);
     refreshPoolKeys(0).catch((e) => log(`pool: ${(e as Error).message}`, "err"));
   }
-  const shown = poolKeys?.length ?? 0;
-  const total = poolSize ?? 0;
-  const hasMore = poolKeys !== null && shown < total;
+  const own = keys.filter((k) => ownPoolKids.has(k.kid));
+  const others = (poolKeys ?? []).filter((k) => !ownPoolKids.has(k.kid));
+  const fetched = poolKeys?.length ?? 0;
+  const hasMore = poolKeys !== null && fetched < (poolSize ?? 0);
   return (
-    <Panel title={`🌊 bait pool (${total.toLocaleString()} keys)`} onClose={onClose}>
+    <Panel title={`🌊 bait pool (${(poolSize ?? 0).toLocaleString()} keys)`} onClose={onClose}>
       <p className="mb-2 text-[13px] text-neutral-600">
         public keys anyone can cast a sealed catch to — the server cannot tell which ones are yours.
       </p>
@@ -104,8 +105,17 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
         <table className="w-full text-[13px]">
           <tbody>
             {poolKeys === null && <tr><td className="text-neutral-600">loading…</td></tr>}
-            {poolKeys?.length === 0 && <tr><td className="text-neutral-600">the void is empty — no bait in the pool</td></tr>}
-            {poolKeys?.map((k, i) => (
+            {own.map((k) => (
+              <tr key={`own-${k.kid}`}>
+                <td className="pr-3 font-mono">★</td>
+                <td className="pr-3 font-mono">{k.kid.slice(0, 13)}…</td>
+                <td className="text-green-700">yours · {formatExpiry(k.expiresAt)}</td>
+              </tr>
+            ))}
+            {poolKeys?.length === 0 && own.length === 0 && (
+              <tr><td className="text-neutral-600">the void is empty — no bait in the pool</td></tr>
+            )}
+            {others.map((k, i) => (
               <tr key={k.kid}>
                 <td className="pr-3 font-mono">{i + 1}.</td>
                 <td className="pr-3 font-mono">{k.kid.slice(0, 13)}…</td>
@@ -117,7 +127,7 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
       </div>
       <div className="mt-2 flex items-center gap-3 text-[13px]">
         <span className="text-neutral-600">
-          showing {shown.toLocaleString()} / {total.toLocaleString()}
+          showing {others.length.toLocaleString()} / {(poolSize ?? 0).toLocaleString()}
         </span>
         {hasMore && (
           <button
@@ -125,7 +135,7 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
             disabled={loadingMore}
             onClick={() => {
               setLoadingMore(true);
-              refreshPoolKeys(shown)
+              refreshPoolKeys(fetched)
                 .catch((e) => log(`pool: ${(e as Error).message}`, "err"))
                 .finally(() => setLoadingMore(false));
             }}

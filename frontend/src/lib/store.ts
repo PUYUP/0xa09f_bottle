@@ -175,6 +175,9 @@ export async function depositUndeposited(ttlRaw: string): Promise<number> {
     await idbPut(KEY_STORE, k);
   }
   await loadKeys();
+  // Refresh the browsable pool list so a just-deposited key shows up
+  // without a page reload.
+  refreshPoolKeys(0).catch(() => {});
   return pending.length;
 }
 
