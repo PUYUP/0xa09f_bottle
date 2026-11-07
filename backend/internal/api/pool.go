@@ -42,6 +42,9 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 		if req.Keys[i].TTLSeconds < 0 || req.Keys[i].TTLSeconds > 2592000 || (req.Keys[i].TTLSeconds > 0 && req.Keys[i].TTLSeconds < 60) {
 			return fiber.NewError(fiber.StatusBadRequest, "ttlSeconds must be 0 or 60..2592000")
 		}
+		if tz := req.Keys[i].TZOffset; tz != nil && (*tz < -720 || *tz > 840) {
+			return fiber.NewError(fiber.StatusBadRequest, "tzOffset must be -720..840")
+		}
 		req.Keys[i].ExpiresAt = 0
 	}
 	if err := s.store.DepositKeys(c.Context(), req.Keys); err != nil {
@@ -61,8 +64,9 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 }
 
 type fetchRequest struct {
-	Count   int      `json:"count"`
-	Exclude []string `json:"exclude,omitempty"`
+	Count    int      `json:"count"`
+	Exclude  []string `json:"exclude,omitempty"`
+	TZOffset *int     `json:"tzOffset,omitempty"`
 }
 
 func (s *Server) fetchKeys(c fiber.Ctx) error {
@@ -86,6 +90,9 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid exclude kid")
 		}
 	}
+	if tz := req.TZOffset; tz != nil && (*tz < -720 || *tz > 840) {
+		return fiber.NewError(fiber.StatusBadRequest, "tzOffset must be -720..840")
+	}
 	var exclude []string
 	if user, ok := s.authUser(c); ok {
 		if kids, err := s.pg.ListBlockedKids(c.Context(), user.ID, 10000); err == nil {
@@ -95,7 +102,7 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 		}
 	}
 	exclude = append(exclude, req.Exclude...)
-	keys, err := s.store.FetchKeys(c.Context(), req.Count, exclude)
+	keys, err := s.store.FetchKeys(c.Context(), req.Count, exclude, req.TZOffset)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "fetch failed")
 	}

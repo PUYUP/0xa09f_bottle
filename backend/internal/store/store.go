@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +30,11 @@ type PoolKey struct {
 	PublicKey  string `json:"publicKey"`
 	TTLSeconds int    `json:"ttlSeconds,omitempty"`
 	ExpiresAt  int64  `json:"expiresAt"`
-	DepositedN int    `json:"-"`
+	// TZOffset is minutes east of UTC (-720..840), self-declared by the
+	// depositing client. Used to bias fetches toward the requester's
+	// timezone zone. Nil means unknown (legacy deposits).
+	TZOffset   *int `json:"tzOffset,omitempty"`
+	DepositedN int  `json:"-"`
 }
 
 type Envelope struct {
@@ -103,6 +108,7 @@ type poolMember struct {
 	KID string `json:"k"`
 	PK  string `json:"p"`
 	Exp int64  `json:"e"`
+	TZ  *int   `json:"t,omitempty"`
 }
 
 func encodePoolMember(k PoolKey, expiresAt int64) (string, error) {
@@ -116,7 +122,7 @@ func encodePoolMember(k PoolKey, expiresAt int64) (string, error) {
 	if jwk.X == "" || jwk.Y == "" {
 		return "", errors.New("publicKey missing x/y coordinates")
 	}
-	raw, err := json.Marshal(poolMember{KID: k.KID, PK: jwk.X + "." + jwk.Y, Exp: expiresAt})
+	raw, err := json.Marshal(poolMember{KID: k.KID, PK: jwk.X + "." + jwk.Y, Exp: expiresAt, TZ: k.TZOffset})
 	if err != nil {
 		return "", err
 	}
@@ -133,7 +139,7 @@ func decodePoolMember(raw string) (PoolKey, bool) {
 		return PoolKey{}, false
 	}
 	pub := fmt.Sprintf(`{"kty":"EC","crv":"P-256","x":%q,"y":%q}`, parts[0], parts[1])
-	return PoolKey{KID: m.KID, PublicKey: pub, ExpiresAt: m.Exp}, true
+	return PoolKey{KID: m.KID, PublicKey: pub, ExpiresAt: m.Exp, TZOffset: m.TZ}, true
 }
 
 func poolKeyFromMember(raw string) (PoolKey, bool) {
@@ -215,6 +221,12 @@ func (s *Store) DepositKeys(ctx context.Context, keys []PoolKey) error {
 	return err
 }
 
+// fetchKeysScript picks `count` random members, biased toward the
+// requester's timezone zone when ARGV[4] carries a tz offset (minutes east
+// of UTC). Roughly 60% of picks prefer members whose offset is within
+// ±120 minutes (circular) of the requester; the rest — and any shortfall
+// when the zone is sparse — come from the global pool. Members without a
+// tz field are global-only. Excluded kids stay in the pool.
 var fetchKeysScript = redis.NewScript(`
 local now = tonumber(ARGV[1])
 local count = tonumber(ARGV[2])
@@ -225,44 +237,64 @@ if ARGV[3] and ARGV[3] ~= '' then
     for _, k in ipairs(arr) do exclude[tostring(k)] = true end
   end
 end
-local function kidOf(m)
+local tz = nil
+if ARGV[4] and ARGV[4] ~= '' then tz = tonumber(ARGV[4]) end
+local zoneWant = 0
+if tz ~= nil then zoneWant = math.floor(count * 0.6 + 0.5) end
+local function parse(m)
   local ok, obj = pcall(cjson.decode, m)
-  if ok then return obj.k or obj.kid end
-  return nil
+  if not ok or type(obj) ~= 'table' then return nil, nil end
+  return obj.k or obj.kid, tonumber(obj.t)
 end
-local function excluded(m)
-  local kid = kidOf(m)
-  return kid ~= nil and exclude[kid] == true
+local function inZone(t)
+  if tz == nil or t == nil then return false end
+  local d = math.abs(t - tz) % 1440
+  if d > 720 then d = 1440 - d end
+  return d <= 120
 end
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
 redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', now)
 local card = redis.call('ZCARD', KEYS[1])
 if card == 0 then return {} end
 if count > card then count = card end
-local members = {}
-if count >= card then
-  local all = redis.call('ZRANGE', KEYS[1], 0, -1)
-  for _, m in ipairs(all) do
-    if not excluded(m) then members[#members + 1] = m end
-  end
-else
-  local used = {}
+local used = {}
+local function pick(wantZone)
   local guard = 0
-  local maxGuard = count * 50 + 200
-  while #members < count and guard < maxGuard do
+  local fallback = nil
+  while guard < 80 do
     guard = guard + 1
     local rank = math.random(0, card - 1)
     if not used[rank] then
       used[rank] = true
       local m = redis.call('ZRANGE', KEYS[1], rank, rank)[1]
-      if m and not excluded(m) then members[#members + 1] = m end
+      if m then
+        local kid, t = parse(m)
+        if not (kid ~= nil and exclude[kid] == true) then
+          if (wantZone and inZone(t)) or not wantZone then
+            return m
+          end
+          if fallback == nil then fallback = m end
+        end
+      end
     end
   end
+  return fallback
+end
+local members = {}
+for _ = 1, zoneWant do
+  local m = pick(true)
+  if m == nil then break end
+  members[#members + 1] = m
+end
+for _ = #members + 1, count do
+  local m = pick(false)
+  if m == nil then break end
+  members[#members + 1] = m
 end
 if #members > 0 then
   redis.call('ZREM', KEYS[1], unpack(members))
   for _, m in ipairs(members) do
-    local kid = kidOf(m)
+    local kid = parse(m)
     if kid then redis.call('ZREM', KEYS[2], kid) end
   end
 end
@@ -272,7 +304,9 @@ return members
 // FetchKeys atomically removes and returns up to count random pool keys.
 // exclude lists kid values that must not be handed out (e.g. keys owned by
 // users blocked by the requester); excluded members stay in the pool.
-func (s *Store) FetchKeys(ctx context.Context, count int, exclude []string) ([]PoolKey, error) {
+// tzOffset (minutes east of UTC) biases ~60% of picks toward keys in the
+// same ±2h timezone zone; nil keeps the legacy fully-random behavior.
+func (s *Store) FetchKeys(ctx context.Context, count int, exclude []string, tzOffset *int) ([]PoolKey, error) {
 	if count <= 0 {
 		return nil, nil
 	}
@@ -284,7 +318,11 @@ func (s *Store) FetchKeys(ctx context.Context, count int, exclude []string) ([]P
 		}
 		excludeJSON = string(raw)
 	}
-	raw, err := fetchKeysScript.Run(ctx, s.rdb, []string{poolKey, kidsKey}, time.Now().Unix(), count, excludeJSON).StringSlice()
+	tzArg := ""
+	if tzOffset != nil {
+		tzArg = strconv.Itoa(*tzOffset)
+	}
+	raw, err := fetchKeysScript.Run(ctx, s.rdb, []string{poolKey, kidsKey}, time.Now().Unix(), count, excludeJSON, tzArg).StringSlice()
 	if err != nil {
 		return nil, err
 	}

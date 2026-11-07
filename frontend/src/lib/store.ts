@@ -165,6 +165,7 @@ export async function depositUndeposited(ttlRaw: string): Promise<number> {
         kid: k.kid,
         publicKey: JSON.stringify(k.publicJwk),
         ttlSeconds: ttl,
+        tzOffset: -new Date().getTimezoneOffset(),
       })),
     }),
   });
@@ -213,6 +214,7 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     body: JSON.stringify({
       count: BOTTLE_QUOTA,
       exclude: state.keys.map((k) => k.kid),
+      tzOffset: -new Date().getTimezoneOffset(),
     }),
   });
   const allPoolKeys = fetched.keys || [];
