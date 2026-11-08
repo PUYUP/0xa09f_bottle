@@ -216,13 +216,14 @@ export default function App() {
               <span className="retro-link" onClick={() => setDetailPath([])}>← back to catch</span>
             )}
             {!detailNode && "only you can read these"}
-            <span
-              className="retro-link"
+            <button
+              className="retro-btn"
+              style={{ padding: "0 8px" }}
               title="check for new catches"
               onClick={() => run(checkBottles)}
             >
               🔄 refresh
-            </span>
+            </button>
           </span>
         </div>
         <div className="retro-body">
