@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS bottles (
 );
 CREATE INDEX IF NOT EXISTS bottles_created_at_idx ON bottles (created_at DESC);
 CREATE INDEX IF NOT EXISTS bottles_parent_id_idx ON bottles (parent_id) WHERE parent_id <> '';
-CREATE INDEX IF NOT EXISTS bottles_root_id_idx ON bottles (root_id) WHERE root_id <> '';
 ALTER TABLE bottles ADD COLUMN IF NOT EXISTS root_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS bottles_root_id_idx ON bottles (root_id) WHERE root_id <> '';
 
 -- One row per envelope kid: the index behind "bottles involving me"
 -- queries (recipient pool kids, self:<userId> sender marker, reply:<id>).
