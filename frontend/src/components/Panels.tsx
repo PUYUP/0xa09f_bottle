@@ -98,12 +98,12 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
           <div className="text-neutral-600">status unavailable</div>
         ) : lost.length === 0 ? (
           <div className="text-green-700">
-            all live keys are in the pool{usedCount > 0 ? ` · ${usedCount} used` : ""}
+            all live bait is in the water{usedCount > 0 ? ` · ${usedCount} eaten` : ""}
           </div>
         ) : (
           <>
             <div className="mb-1 text-amber-700">
-              ⚠ {lost.length} key(s) missing from pool{usedCount > 0 ? ` · ${usedCount} used` : ""} — re-deposit to restore
+              ⚠ {lost.length} bait missing from the water{usedCount > 0 ? ` · ${usedCount} eaten` : ""} — re-cast to restore
             </div>
             <div className="mb-1 font-mono text-[12px] text-neutral-600">
               {lost.map((k) => k.kid.slice(0, 13) + "…").join("  ")}
@@ -122,7 +122,7 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
                   .finally(() => setSyncBusy(false));
               }}
             >
-              restore {lost.length} key{lost.length === 1 ? "" : "s"}
+              re-cast {lost.length} bait
             </button>
           </>
         )}
@@ -134,20 +134,24 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
             <tr><td className="text-neutral-600">no bait yet — hit "throw bait"</td></tr>
           )}
           {visible.map((k: KeyRecord) => {
+            const st = statuses?.get(k.kid);
             let meta: string;
             let cls = "";
             if (!k.depositedAt) {
-              meta = `pending · created ${k.createdAt ? new Date(k.createdAt).toLocaleString() : "—"}`;
+              meta = `🥚 on the bank · tied ${k.createdAt ? new Date(k.createdAt).toLocaleString() : "—"}`;
               cls = "text-amber-700";
             } else if (ownPoolKids.has(k.kid)) {
               const remaining = k.expiresAt ? (k.expiresAt - Date.now()) / 1000 : NaN;
-              meta = `in pool${k.expiresAt ? ` · ${remaining > 0 ? formatTTL(remaining) : "expired"}` : ""}`;
+              meta = `🎣 in the water${k.expiresAt ? ` · ${remaining > 0 ? formatTTL(remaining) : "expired"}` : ""}`;
               cls = "text-green-700";
             } else if (k.expiresAt && k.expiresAt <= Date.now()) {
-              meta = `expired ${new Date(k.expiresAt).toLocaleString()}`;
+              meta = `🕸 gone cold · ${new Date(k.expiresAt).toLocaleString()}`;
               cls = "text-red-700";
+            } else if (st?.consumed) {
+              meta = `😋 eaten! · ${k.depositedAt ? new Date(k.depositedAt).toLocaleString() : "—"}`;
+              cls = "text-blue-800";
             } else {
-              meta = `used · deposited ${k.depositedAt ? new Date(k.depositedAt).toLocaleString() : "—"}`;
+              meta = `🫥 lost at sea · ${k.depositedAt ? new Date(k.depositedAt).toLocaleString() : "—"}`;
               cls = "text-blue-800";
             }
             return (
