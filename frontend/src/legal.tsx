@@ -3,7 +3,7 @@ export function TermsContent() {
     <>
       <h2>Terms of Service</h2>
       <p>
-        saltleak is an anonymous, end-to-end encrypted "message in a bottle" relay.
+        a09f is an anonymous, end-to-end encrypted "message in a bottle" relay.
         By using it you agree to these terms.
       </p>
 
@@ -16,7 +16,7 @@ export function TermsContent() {
       </p>
 
       <h3>2. Acceptable use</h3>
-      <p>You agree not to use saltleak to:</p>
+      <p>You agree not to use a09f to:</p>
       <ul>
         <li>send illegal content, harassment, hate speech, or CSAM;</li>
         <li>attempt to break, probe, or overload the relay;</li>
@@ -63,7 +63,7 @@ export function PrivacyContent() {
     <>
       <h2>Privacy Policy</h2>
       <p>
-        saltleak is designed so the server is <strong>blind</strong>: it stores
+        a09f is designed so the server is <strong>blind</strong>: it stores
         ciphertext and public keys, never plaintext or private keys.
       </p>
 
@@ -95,7 +95,7 @@ export function PrivacyContent() {
       <p>
         Your IP address <strong>is still recorded by the server</strong> — it is
         used transiently for rate limiting and abuse prevention, and may appear
-        in standard server logs. saltleak cannot hide your IP from the relay
+        in standard server logs. a09f cannot hide your IP from the relay
         operator; only you can.
       </p>
       <p>

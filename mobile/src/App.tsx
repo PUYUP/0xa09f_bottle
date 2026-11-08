@@ -144,7 +144,7 @@ export default function App() {
           <div style={{ width: "100%" }}>
             <h2>choose your name</h2>
             <p style={{ color: "var(--ion-color-medium)", fontSize: 14 }}>
-              saltleak needs a username — bound to this device's identity key
+              a09f needs a username — bound to this device's identity key
               forever. A random one is prefilled; regenerate if you like.
             </p>
             <IonItem lines="none" className="ion-margin-top">
@@ -185,7 +185,7 @@ export default function App() {
     <IonApp>
       <IonHeader>
         <IonToolbar color="primary">
-          <IonTitle>saltleak</IonTitle>
+          <IonTitle>a09f</IonTitle>
           <IonButtons slot="end">
             <IonButton onClick={() => run(checkBottles)} disabled={busy}>
               <IonIcon icon={refresh} slot="icon-only" />

@@ -46,7 +46,7 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
         </div>
         <div className="retro-body space-y-3">
           <p className="text-[14px] text-neutral-700">
-            saltleak needs a username to identify you — for blocking, reporting
+            a09f needs a username to identify you — for blocking, reporting
             and your public profile. It is bound to this device's identity key
             forever; pick carefully.
           </p>
@@ -150,7 +150,7 @@ export default function App() {
           className="text-3xl font-bold"
           style={{ textShadow: "1px 1px 0 #ffffff, -1px -1px 0 #909090" }}
         >
-          <span className="text-blue-900">🌊</span> saltleak
+          <span className="text-blue-900">🌊</span> a09f
         </h1>
         <p className="text-xs italic text-neutral-700">
           A quiet room for a crowded mind — est. 2025
@@ -545,7 +545,7 @@ export default function App() {
       )}
 
       <p className="mt-3 text-center text-[13px] text-neutral-600">
-        saltleak · best viewed at 800×600 · works in netscape navigator · no cookies were harmed
+        a09f · best viewed at 800×600 · works in netscape navigator · no cookies were harmed
         {" · "}
         <span className="retro-link" onClick={() => setLegal("terms")}>terms</span>
         {" · "}

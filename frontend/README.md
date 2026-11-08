@@ -1,4 +1,4 @@
-# saltleak frontend
+# a09f frontend
 
 React + Vite + Tailwind CSS client for the anonymous E2EE bottle network.
 All cryptography runs in the browser (WebCrypto); the backend is a blind relay.
@@ -31,7 +31,7 @@ VITE_API_URL=https://api.example.com npm run build
 or with Docker:
 
 ```sh
-docker build --build-arg VITE_API_URL=https://api.example.com -t saltleak-web .
+docker build --build-arg VITE_API_URL=https://api.example.com -t a09f-web .
 docker run -p 80:80 saltleak-web
 ```
 

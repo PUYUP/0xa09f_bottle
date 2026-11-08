@@ -1,4 +1,4 @@
-# saltleak mobile
+# a09f mobile
 
 Ionic React app sharing the E2EE core with the web frontend.
 
@@ -25,7 +25,7 @@ npm run preview        # serve dist locally
 
 ```bash
 npm i -D @capacitor/core @capacitor/cli @capacitor/android @capacitor/ios
-npx cap init saltleak com.saltleak.app --web-dir dist
+npx cap init a09f com.saltleak.app --web-dir dist
 npx cap add android    # or: npx cap add ios
 npx cap sync
 npx cap open android   # opens Android Studio

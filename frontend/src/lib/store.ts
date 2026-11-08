@@ -1360,7 +1360,7 @@ export async function exportVault() {
   const passphrase = window.prompt("vault passphrase");
   if (!passphrase) return;
   const encrypted = await encryptVault(JSON.stringify(payload), passphrase);
-  downloadJson("saltleak-identity.json", encrypted);
+  downloadJson("a09f-identity.json", encrypted);
   log(`exported encrypted vault with ${payload.keys.length} pool key(s)`);
 }
 

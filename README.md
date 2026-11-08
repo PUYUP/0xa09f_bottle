@@ -1,4 +1,4 @@
-# saltleak (0xa09f/bottle)
+# a09f (0xa09f/bottle)
 
 Anonymous, asynchronous, end-to-end encrypted "message in a sea" network for software engineers. The server is a blind relay: it never sees plaintext or private keys.
 
@@ -36,4 +36,4 @@ Or serve the legacy embedded client directly from the backend at `http://localho
 ## Deploy separately
 
 - **Backend**: `cd backend && docker compose up -d --build` (or `docker build -t bottle-api .`).
-- **Frontend**: `cd frontend && docker build --build-arg VITE_API_URL=https://<api-host> -t saltleak-web .` then run the nginx image, or any static host.
+- **Frontend**: `cd frontend && docker build --build-arg VITE_API_URL=https://<api-host> -t a09f-web .` then run the nginx image, or any static host.
