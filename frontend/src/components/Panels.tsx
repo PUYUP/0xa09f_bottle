@@ -174,7 +174,7 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
               <span className="font-mono text-[13px] text-neutral-600">({identity.userId})</span>
             </>
           ) : (
-            <i>anonymous — claim a username to enable blocking & reporting</i>
+            <i>anonymous — claim a username to enable blocking, reporting &amp; stats</i>
           )}
         </div>
         <div className="flex gap-2">
@@ -194,6 +194,11 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
             claim
           </button>
         </div>
+        {identity?.username && statsLoaded && !stats && (
+          <p className="text-[13px] text-neutral-600">
+            stats unavailable — backend may be outdated
+          </p>
+        )}
         {identity?.username && stats && (
           <div>
             <p className="mb-1 text-[13px] text-neutral-600">your numbers (server-side):</p>
