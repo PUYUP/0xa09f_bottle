@@ -211,12 +211,18 @@ export default function App() {
               ? `📬 message ${(detailNode.rec.bottle?.id || "").slice(0, 8)} — depth ${(detailNode.rec.bottle?.depth || 1)}`
               : `📬 catch — ${threads.length} message${threads.length === 1 ? "" : "s"}`}
           </span>
-          <span className="text-[13px]">
-            {detailNode ? (
+          <span className="flex items-center gap-2 text-[13px]">
+            {detailNode && (
               <span className="retro-link" onClick={() => setDetailPath([])}>← back to catch</span>
-            ) : (
-              "only you can read these"
             )}
+            <span
+              className="retro-link"
+              title="check for new catches"
+              onClick={() => run(checkBottles)}
+            >
+              🔄
+            </span>
+            {!detailNode && "only you can read these"}
           </span>
         </div>
         <div className="retro-body">
