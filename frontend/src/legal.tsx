@@ -91,6 +91,35 @@ export function PrivacyContent() {
         conversation exists and its shape — but not what it says.
       </p>
 
+      <h3>Your IP address</h3>
+      <p>
+        Your IP address <strong>is still recorded by the server</strong> — it is
+        used transiently for rate limiting and abuse prevention, and may appear
+        in standard server logs. saltleak cannot hide your IP from the relay
+        operator; only you can.
+      </p>
+      <p>
+        If you want to be untracked, browse through an anonymity tool:
+      </p>
+      <ul>
+        <li>
+          <a href="https://www.torproject.org/" target="_blank" rel="noopener noreferrer">
+            Tor Browser
+          </a>{" "}
+          — free, routes traffic through three relays so the server only sees a
+          Tor exit node.
+        </li>
+        <li>
+          A reputable VPN or proxy also masks your IP, though it shifts trust
+          to the VPN provider.
+        </li>
+      </ul>
+      <p>
+        Note: Tor does not make you unidentifiable inside the app — your keys,
+        messages and timing patterns are still yours. It only hides your IP
+        from the server.
+      </p>
+
       <h3>Accounts & identity</h3>
       <p>
         Registration is optional. A username only enables block/report
