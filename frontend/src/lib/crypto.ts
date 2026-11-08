@@ -214,6 +214,61 @@ export async function unwrapSessionKey(
   );
 }
 
+// ---------- encrypted sync state ----------
+// readAt/dismissedAt sync across devices as an opaque AES-GCM blob keyed by
+// the identity private key. The server stores ciphertext it cannot read.
+
+const SYNC_INFO = "a09f-sync-v1";
+
+export interface SyncPayload {
+  v: number;
+  readAt: Record<string, number>; // meta record id -> unix ms
+  dismissed: Record<string, number>; // bait kid -> unix ms
+}
+
+async function deriveSyncKey(identityPrivateJwk: JWK): Promise<CryptoKey> {
+  const dBytes = b64urlToBytes(identityPrivateJwk.d || "");
+  const hkdf = await crypto.subtle.importKey("raw", dBytes, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: textBytes("a09f"), info: textBytes(SYNC_INFO) },
+    hkdf,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+export async function encryptSyncState(payload: SyncPayload, identityPrivateJwk: JWK): Promise<string> {
+  const key = await deriveSyncKey(identityPrivateJwk);
+  const iv = randBytes(12);
+  const ct = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    textBytes(JSON.stringify(payload))
+  );
+  const raw = new Uint8Array(iv.length + ct.byteLength);
+  raw.set(iv, 0);
+  raw.set(new Uint8Array(ct), iv.length);
+  return bytesToB64(raw);
+}
+
+export async function decryptSyncState(blob: string, identityPrivateJwk: JWK): Promise<SyncPayload | null> {
+  try {
+    const key = await deriveSyncKey(identityPrivateJwk);
+    const raw = b64ToBytes(blob);
+    const pt = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: raw.slice(0, 12) },
+      key,
+      raw.slice(12)
+    );
+    const obj = JSON.parse(new TextDecoder().decode(pt)) as SyncPayload;
+    if (obj?.v !== 1) return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
 export async function decryptPayload(
   bottle: { id: string; payloadIv?: string; ciphertext?: string },
   rawSessionKey: ArrayBuffer

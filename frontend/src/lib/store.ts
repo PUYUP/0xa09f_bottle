@@ -7,15 +7,18 @@ import {
   SELF_PREFIX,
   decodePlaintext,
   decryptPayload,
+  decryptSyncState,
   derivePickupProof,
   deriveReplyKeyPair,
   encodePlaintext,
+  encryptSyncState,
   makeKeyRecord,
   unwrapSessionKey,
   wrapSessionKey,
+  type SyncPayload,
 } from "./crypto";
 import { idbClear, idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
-import { claimUsername, deriveUserId, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
+import { claimUsername, computeProof, deriveUserId, fetchNonce, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
   Bottle,
@@ -119,6 +122,110 @@ export async function loadKeys() {
   setState({ keys: keyRecords });
   await refreshActivePoolKeys();
   syncProfile().catch(() => {});
+  pullSyncState().catch(() => {});
+}
+
+// ---------- encrypted sync state ----------
+// readAt/dismissedAt ride to other devices as an AES-GCM blob the server
+// cannot read. Pulled once per session after loadKeys; pushed (debounced)
+// whenever read/dismiss state changes.
+
+// syncReadAt caches remote read timestamps by meta record id so bottles
+// fetched AFTER the pull still land with their read state applied.
+const syncReadAt = new Map<string, number>();
+let syncPulled = false;
+let syncPushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function syncAuthFields() {
+  const id = await getIdentity();
+  const userId = await deriveUserId(id.publicJwk);
+  const [serverPub, nonce] = await Promise.all([getServerPub(), fetchNonce(userId)]);
+  const { ts, proof } = await computeProof(id.privateJwk, serverPub, userId, nonce);
+  return {
+    publicKey: JSON.stringify(id.publicJwk),
+    userId,
+    ts,
+    nonce,
+    proof,
+  };
+}
+
+async function buildSyncPayload(): Promise<SyncPayload> {
+  const readAt: Record<string, number> = {};
+  const meta = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
+  for (const r of meta) {
+    if (r?.readAt) readAt[r.id] = r.readAt;
+  }
+  const dismissed: Record<string, number> = {};
+  for (const k of state.keys) {
+    if (k.dismissedAt) dismissed[k.kid] = k.dismissedAt;
+  }
+  return { v: 1, readAt, dismissed };
+}
+
+async function applySyncPayload(payload: SyncPayload) {
+  const meta = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
+  for (const r of meta) {
+    const remote = payload.readAt?.[r.id];
+    if (remote && remote > (r.readAt || 0)) {
+      r.readAt = remote;
+      r.repliesSeenAt = Math.max(r.repliesSeenAt || 0, remote);
+      await idbPut(META_STORE, r).catch(() => {});
+    }
+  }
+  let keysDirty = false;
+  const nextKeys = state.keys.map((k) => {
+    const remote = payload.dismissed?.[k.kid];
+    if (remote && remote > (k.dismissedAt || 0)) {
+      keysDirty = true;
+      return { ...k, dismissedAt: remote };
+    }
+    return k;
+  });
+  if (keysDirty) {
+    setState({ keys: nextKeys });
+    await Promise.all(
+      nextKeys.filter((k) => payload.dismissed?.[k.kid]).map((k) => idbPut(KEY_STORE, k))
+    );
+  }
+  for (const [id, ts] of Object.entries(payload.readAt || {})) {
+    syncReadAt.set(id, Math.max(syncReadAt.get(id) || 0, ts));
+  }
+  await renderInbox();
+}
+
+async function pullSyncState() {
+  if (syncPulled) return;
+  syncPulled = true;
+  const auth = await syncAuthFields();
+  const res = await api<{ blob?: string }>("/api/sync/state", {
+    method: "POST",
+    body: JSON.stringify(auth),
+  });
+  if (!res?.blob) return;
+  const id = await getIdentity();
+  const payload = await decryptSyncState(res.blob, id.privateJwk);
+  if (payload) await applySyncPayload(payload);
+}
+
+async function pushSyncState() {
+  const id = await getIdentity().catch(() => null);
+  if (!id?.privateJwk) return;
+  const payload = await buildSyncPayload();
+  const blob = await encryptSyncState(payload, id.privateJwk);
+  const auth = await syncAuthFields();
+  await api("/api/sync/state", {
+    method: "POST",
+    body: JSON.stringify({ ...auth, blob }),
+  });
+}
+
+function scheduleSyncPush() {
+  if (syncPushTimer) return;
+  syncPushTimer = setTimeout(() => {
+    syncPushTimer = null;
+    pushSyncState().catch(() => {});
+  }, 2000);
 }
 
 function keyByKidMap(): Map<string, KeyRecord> {
@@ -484,6 +591,7 @@ export async function dismissEatenBait(kid: string) {
     setState({ keys: [...state.keys] });
   }
   await renderInbox();
+  scheduleSyncPush();
 }
 
 export async function reportBottle(bottleId: string) {
@@ -680,6 +788,7 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         // Merge onto any existing record so repliesSeenAt/readAt/stats
         // survive a server-side re-fetch (e.g. after a vault import).
         const prev = await idbGet<ThreadRecord>(META_STORE, `sent:${bottle.id}`).catch(() => null);
+        const remoteRead = syncReadAt.get(`sent:${bottle.id}`);
         await idbPut(META_STORE, {
           ...(prev || {}),
           id: `sent:${bottle.id}`,
@@ -688,8 +797,8 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
           kid: envelope.kid,
           claim: { status: "SENT" },
           caughtAt: Date.now(),
-          repliesSeenAt: prev?.repliesSeenAt ?? 0,
-          readAt: prev?.readAt,
+          repliesSeenAt: prev?.repliesSeenAt ?? remoteRead ?? 0,
+          readAt: prev?.readAt ?? remoteRead,
           lastChildAt: prev?.lastChildAt,
           childCount: prev?.childCount,
         }).catch(() => {});
@@ -703,6 +812,7 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
       } catch (e) {
         claim = { ok: false, error: (e as Error).message };
       }
+      const remoteRead = syncReadAt.get(`caught:${bottle.id}`);
       await idbPut(META_STORE, {
         id: `caught:${bottle.id}`,
         bottle,
@@ -710,6 +820,8 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         kid: envelope.kid,
         claim,
         caughtAt: Date.now(),
+        readAt: remoteRead,
+        repliesSeenAt: remoteRead,
       }).catch(() => {});
       // note: reply keys are NOT burned at max depth — reply:<parentId>
       // decrypts every reply addressed to that parent (all same depth),
@@ -804,6 +916,7 @@ export async function openThread(bottleId: string) {
     }
   }
   await renderInbox();
+  scheduleSyncPush();
 }
 
 export async function checkBottles() {
@@ -1083,6 +1196,8 @@ export async function importVaultFile(file: File) {
   sharedBitsCache.clear();
   caughtThisSession.clear();
   profileSynced = false;
+  syncPulled = false;
+  syncReadAt.clear();
   let restored = 0;
 
   if (payload.version === 4) {

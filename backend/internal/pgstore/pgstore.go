@@ -115,6 +115,14 @@ CREATE TABLE IF NOT EXISTS reported_bottles (
   PRIMARY KEY (bottle_id, reporter_user_id)
 );
 CREATE INDEX IF NOT EXISTS reported_bottles_created_idx ON reported_bottles (created_at DESC);
+
+-- user_sync_state stores an opaque, client-encrypted state blob per identity
+-- (read receipts, UI dismissals). The server never sees the contents.
+CREATE TABLE IF NOT EXISTS user_sync_state (
+  user_id     TEXT PRIMARY KEY,
+  blob        TEXT NOT NULL,
+  updated_at  BIGINT NOT NULL
+);
 `
 
 type PGStore struct {
@@ -409,6 +417,29 @@ SELECT pubkey FROM (
 		pubs = append(pubs, pub)
 	}
 	return pubs, rows.Err()
+}
+
+// GetSyncState returns the stored opaque blob for a user, if any.
+func (p *PGStore) GetSyncState(ctx context.Context, userID string) (string, int64, error) {
+	var blob string
+	var updated int64
+	err := p.pool.QueryRow(ctx,
+		`SELECT blob, updated_at FROM user_sync_state WHERE user_id = $1`, userID,
+	).Scan(&blob, &updated)
+	if err != nil {
+		return "", 0, err
+	}
+	return blob, updated, nil
+}
+
+// PutSyncState upserts the opaque blob for a user.
+func (p *PGStore) PutSyncState(ctx context.Context, userID, blob string) error {
+	_, err := p.pool.Exec(ctx, `
+INSERT INTO user_sync_state (user_id, blob, updated_at)
+VALUES ($1, $2, $3)
+ON CONFLICT (user_id) DO UPDATE SET blob = EXCLUDED.blob, updated_at = EXCLUDED.updated_at`,
+		userID, blob, time.Now().Unix())
+	return err
 }
 
 func (p *PGStore) UpdateDelivery(ctx context.Context, id string, deliveries int, status string, deliveredKids []string) error {
