@@ -422,12 +422,11 @@ async function catchKidsParam(): Promise<string> {
       knownIds.add(r.bottle.id);
     }
   }
-  // Only kids still able to receive NEW bottles: currently in-pool keys
-  // (consumed/expired kids can never be targeted again — their old bottles
-  // are already in local records).
-  const liveKids = state.ownPoolKids.size > 0
-    ? [...state.ownPoolKids]
-    : state.keys.filter((k) => k.depositedAt && (!k.expiresAt || k.expiresAt > Date.now())).map((k) => k.kid);
+  // Every deposited key stays eligible: pool TTL only governs presence in
+  // the pool, not the validity of bottles already addressed to the key. A
+  // consumed or expired key can still be the target of an existing bottle,
+  // so it must remain in the kids filter or that bottle becomes invisible.
+  const liveKids = state.keys.filter((k) => k.depositedAt).map((k) => k.kid);
   const parts: string[] = liveKids;
   const idt = await getIdentity().catch(() => null);
   if (!idt?.publicJwk) return "";
