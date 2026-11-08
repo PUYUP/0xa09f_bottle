@@ -26,7 +26,7 @@ export default function App() {
   const [page, setPage] = useState<"catch" | "pool" | "bait" | "account">("catch");
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [threadLimit, setThreadLimit] = useState(10);
-  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailPath, setDetailPath] = useState<string[]>([]);
   const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>> | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -202,7 +202,7 @@ export default function App() {
 
       {/* ── catch page ─────────────────────────────────────── */}
       {page === "catch" && (() => {
-        const detailNode = detailId ? findNode(threads, detailId) : null;
+        const detailNode = detailPath.length ? findNode(threads, detailPath[detailPath.length - 1]) : null;
         return (
       <div className="bevel mb-2">
         <div className="retro-titlebar">
@@ -213,17 +213,37 @@ export default function App() {
           </span>
           <span className="text-[13px]">
             {detailNode ? (
-              <span className="retro-link" onClick={() => setDetailId(null)}>← back to catch</span>
+              <span className="retro-link" onClick={() => setDetailPath([])}>← back to catch</span>
             ) : (
               "only you can read these"
             )}
           </span>
         </div>
         <div className="retro-body">
+          {detailNode && (
+            <div className="mb-2 text-[13px] text-neutral-600">
+              <span className="retro-link" onClick={() => setDetailPath([])}>📬 catch</span>
+              {detailPath.map((id, i) => (
+                <span key={id}>
+                  {" / "}
+                  <span
+                    className={i === detailPath.length - 1 ? "font-bold text-neutral-800" : "retro-link"}
+                    onClick={() => i < detailPath.length - 1 && setDetailPath(detailPath.slice(0, i + 1))}
+                  >
+                    #{id.slice(0, 8)}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
           {detailNode ? (
             <ThreadList
               roots={[detailNode]}
-              onOpen={(n) => n.rec.bottle?.id && setDetailId(n.rec.bottle.id)}
+              onOpen={(n) => {
+                const id = n.rec.bottle?.id;
+                if (id && id !== detailPath[detailPath.length - 1])
+                  setDetailPath((p) => [...p, id]);
+              }}
             />
           ) : (
             <>
@@ -272,7 +292,7 @@ export default function App() {
               <div
                 key={r.rec.id}
                 className={`msg bevel-in clickable${isSent ? " sent" : ""}`}
-                onClick={() => r.rec.bottle?.id && setDetailId(r.rec.bottle.id)}
+                onClick={() => r.rec.bottle?.id && setDetailPath([r.rec.bottle.id])}
               >
                 <div className="mb-1 text-[13px] text-neutral-600">
                   <b>🎣 {(r.rec.bottle?.id || "").slice(0, 8)}</b>
