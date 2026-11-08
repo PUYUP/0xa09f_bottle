@@ -633,14 +633,21 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
       const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
       if (isSelf) {
         // Our own sent bottle: recover plaintext locally, no pickup claim.
+        // Merge onto any existing record so repliesSeenAt/readAt/stats
+        // survive a server-side re-fetch (e.g. after a vault import).
+        const prev = await idbGet<ThreadRecord>(META_STORE, `sent:${bottle.id}`).catch(() => null);
         await idbPut(META_STORE, {
+          ...(prev || {}),
           id: `sent:${bottle.id}`,
           bottle,
           plain,
           kid: envelope.kid,
           claim: { status: "SENT" },
           caughtAt: Date.now(),
-          repliesSeenAt: Date.now(),
+          repliesSeenAt: prev?.repliesSeenAt ?? 0,
+          readAt: prev?.readAt,
+          lastChildAt: prev?.lastChildAt,
+          childCount: prev?.childCount,
         }).catch(() => {});
         caughtThisSession.add(bottle.id);
         return true;
