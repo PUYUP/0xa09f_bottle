@@ -53,13 +53,19 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 	if err := s.store.DepositKeys(c.Context(), req.Keys); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "deposit failed")
 	}
-	if user, ok := s.authUser(c); ok {
+	if s.pg != nil {
+		user, authed := s.authUser(c)
 		keys := append([]store.PoolKey(nil), req.Keys...)
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := s.pg.UpsertUserKeys(ctx, user.ID, keys); err != nil {
-				log.Printf("pg user_keys %s: %v", user.ID, err)
+			if err := s.pg.RegisterPoolKeys(ctx, keys); err != nil {
+				log.Printf("pg key_registry: %v", err)
+			}
+			if authed {
+				if err := s.pg.UpsertUserKeys(ctx, user.ID, keys); err != nil {
+					log.Printf("pg user_keys %s: %v", user.ID, err)
+				}
 			}
 		}()
 	}

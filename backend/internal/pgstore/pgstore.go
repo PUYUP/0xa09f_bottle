@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"a09f/bottle/internal/store"
 
@@ -39,6 +40,16 @@ CREATE TABLE IF NOT EXISTS bottle_kids (
 );
 CREATE INDEX IF NOT EXISTS bottle_kids_kid_idx ON bottle_kids (kid);
 ALTER TABLE bottle_kids ADD COLUMN IF NOT EXISTS pubkey TEXT NOT NULL DEFAULT '';
+
+-- key_registry binds kid -> recipient pubkey from deposit time onward, so
+-- proof-of-possession can be verified before any bottle references the kid.
+CREATE TABLE IF NOT EXISTS key_registry (
+  kid         TEXT PRIMARY KEY,
+  public_key  TEXT NOT NULL,
+  owner       TEXT NOT NULL DEFAULT '',
+  created_at  BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS key_registry_owner_idx ON key_registry (owner);
 
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
@@ -236,12 +247,38 @@ ON CONFLICT (bottle_id, kid) DO NOTHING`, b.ID, kids, pubs, b.CreatedAt)
 	return err
 }
 
-// PubkeysForKid returns the distinct recipient pubkeys ever embedded for a
-// kid across all bottles. Used to verify proof-of-possession: a requester
-// must prove control of one of these keys to list kid-filtered bottles.
+// RegisterPoolKeys upserts kid -> pubkey bindings collected at deposit time.
+// Best-effort: failures are logged by the caller, never block deposits.
+func (p *PGStore) RegisterPoolKeys(ctx context.Context, keys []store.PoolKey) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	kids := make([]string, 0, len(keys))
+	pubs := make([]string, 0, len(keys))
+	owners := make([]string, 0, len(keys))
+	now := time.Now().Unix()
+	for _, k := range keys {
+		kids = append(kids, k.KID)
+		pubs = append(pubs, k.PublicKey)
+		owners = append(owners, k.Owner)
+	}
+	_, err := p.pool.Exec(ctx, `
+INSERT INTO key_registry (kid, public_key, owner, created_at)
+SELECT k.kid, k.pub, k.owner, $4
+FROM unnest($1::text[], $2::text[], $3::text[]) AS k(kid, pub, owner)
+ON CONFLICT (kid) DO NOTHING`, kids, pubs, owners, now)
+	return err
+}
+
+// PubkeysForKid returns every pubkey ever bound to a kid: deposit-time
+// registry entries plus recipientPublicKey values embedded in envelopes.
 func (p *PGStore) PubkeysForKid(ctx context.Context, kid string) ([]string, error) {
-	rows, err := p.pool.Query(ctx,
-		`SELECT DISTINCT pubkey FROM bottle_kids WHERE kid = $1 AND pubkey <> ''`, kid)
+	rows, err := p.pool.Query(ctx, `
+SELECT pubkey FROM (
+  SELECT public_key AS pubkey FROM key_registry WHERE kid = $1
+  UNION
+  SELECT pubkey FROM bottle_kids WHERE kid = $1 AND pubkey <> ''
+) t WHERE pubkey <> ''`, kid)
 	if err != nil {
 		return nil, err
 	}
