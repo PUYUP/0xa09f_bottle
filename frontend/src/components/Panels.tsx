@@ -164,19 +164,9 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
   const { blocks } = useApp();
   const [username, setUsername] = useState("");
   const [target, setTarget] = useState("");
-  const [stats, setStats] = useState<UserStats | null>(null);
-  const [statsLoaded, setStatsLoaded] = useState(false);
-  const [meta, setMeta] = useState<ClientMeta | null>(null);
   const identity = useAppIdentity();
 
   if (blocks === null) refreshBlocks().catch(() => {});
-  if (!meta) {
-    getClientMeta().then(setMeta).catch(() => {});
-  }
-  if (identity?.username && !statsLoaded) {
-    setStatsLoaded(true);
-    fetchMyStats().then(setStats).catch(() => {});
-  }
 
   return (
     <Panel title="👤 account" onClose={onClose}>
@@ -208,72 +198,6 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
             claim
           </button>
         </div>
-        {meta && (
-          <div className="msg bevel-in">
-            <p className="mb-1 text-[13px] font-bold text-neutral-700">🖥 your device &amp; network</p>
-            <table className="w-full text-[13px]">
-              <tbody>
-                <tr><td className="pr-3">ip (as seen by relay)</td><td className="font-mono">{meta.ip || "…"}</td></tr>
-                <tr><td className="pr-3">datetime</td><td>{meta.datetime}</td></tr>
-                <tr><td className="pr-3">timezone</td><td>{meta.timezone} (UTC{formatUTCOffset(meta.timezoneOffset)})</td></tr>
-                <tr><td className="pr-3">language</td><td>{meta.language}{meta.languages ? ` (${meta.languages})` : ""}</td></tr>
-                <tr><td className="pr-3">platform</td><td>{meta.platform || "—"}</td></tr>
-                <tr><td className="pr-3">screen</td><td>{meta.screen}</td></tr>
-                <tr><td className="pr-3">cpu cores</td><td>{meta.cores || "—"}</td></tr>
-                {meta.memoryGB ? <tr><td className="pr-3">memory</td><td>{meta.memoryGB} GB</td></tr> : null}
-                {meta.connection ? <tr><td className="pr-3">connection</td><td>{meta.connection}</td></tr> : null}
-                <tr><td className="pr-3">cookies</td><td>{meta.cookies ? "enabled" : "disabled"}</td></tr>
-                <tr><td className="pr-3">do not track</td><td>{meta.doNotTrack || "not set"}</td></tr>
-                <tr><td className="pr-3">touch</td><td>{meta.touch ? "yes" : "no"}</td></tr>
-                <tr><td className="pr-3">online</td><td>{meta.online ? "yes" : "no"}</td></tr>
-              </tbody>
-            </table>
-            <p className="mt-1 break-all font-mono text-[11px] text-neutral-500">{meta.userAgent}</p>
-          </div>
-        )}
-        {identity?.username && statsLoaded && !stats && (
-          <div className="msg bevel-in">
-            <p className="mb-1 text-[13px] font-bold text-neutral-700">📊 your numbers (server-side)</p>
-            <p className="text-[13px] text-neutral-600">
-              stats unavailable — backend may be outdated
-            </p>
-          </div>
-        )}
-        {identity?.username && stats && (
-          <div className="msg bevel-in">
-            <p className="mb-1 text-[13px] font-bold text-neutral-700">📊 your numbers (server-side)</p>
-            <table className="w-full text-[13px]">
-              <tbody>
-                <tr><td className="pr-3">casts</td><td><b>{stats.casts}</b></td></tr>
-                <tr><td className="pr-3">replies</td><td><b>{stats.replies}</b></td></tr>
-                <tr>
-                  <td className="pr-3">picked up by someone</td>
-                  <td>
-                    <b>{stats.castsDelivered}</b>
-                    {stats.casts + stats.replies > 0 && (
-                      <span className="text-neutral-600"> ({Math.round((stats.castsDelivered / (stats.casts + stats.replies)) * 100)}%)</span>
-                    )}
-                  </td>
-                </tr>
-                <tr><td className="pr-3">fully delivered</td><td><b>{stats.castsExhausted}</b></td></tr>
-                <tr><td className="pr-3">bottles received</td><td><b>{stats.received}</b></td></tr>
-                <tr><td className="pr-3">delivery claims</td><td><b>{stats.claims}</b></td></tr>
-                <tr><td className="pr-3">keys deposited</td><td><b>{stats.keysDeposited}</b></td></tr>
-                <tr><td className="pr-3">users blocked</td><td><b>{stats.usersBlocked}</b></td></tr>
-                <tr><td className="pr-3">reports filed</td><td><b>{stats.reportsFiled}</b></td></tr>
-                <tr><td className="pr-3">times reported</td><td><b>{stats.timesReported}</b></td></tr>
-                <tr>
-                  <td className="pr-3">member since</td>
-                  <td>{stats.memberSince ? new Date(stats.memberSince * 1000).toLocaleDateString() : "—"}</td>
-                </tr>
-                <tr>
-                  <td className="pr-3">last activity</td>
-                  <td>{stats.lastActivity ? new Date(stats.lastActivity * 1000).toLocaleString() : "—"}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
         {identity?.username && (
           <>
             <div className="flex gap-2">
@@ -320,6 +244,104 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
         )}
       </div>
     </Panel>
+  );
+}
+
+function InfoCard({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bevel mb-2">
+      <div className="retro-titlebar">
+        <span>{title}</span>
+      </div>
+      <div className="retro-body text-[14px]">{children}</div>
+    </div>
+  );
+}
+
+export function DeviceCard() {
+  const [meta, setMeta] = useState<ClientMeta | null>(null);
+  if (!meta) {
+    getClientMeta().then(setMeta).catch(() => {});
+  }
+  return (
+    <InfoCard title="🖥 your device & network">
+      {!meta && <span className="text-neutral-600">loading…</span>}
+      {meta && (
+        <>
+          <table className="w-full text-[13px]">
+            <tbody>
+              <tr><td className="pr-3">ip (as seen by relay)</td><td className="font-mono">{meta.ip || "…"}</td></tr>
+              <tr><td className="pr-3">datetime</td><td>{meta.datetime}</td></tr>
+              <tr><td className="pr-3">timezone</td><td>{meta.timezone} (UTC{formatUTCOffset(meta.timezoneOffset)})</td></tr>
+              <tr><td className="pr-3">language</td><td>{meta.language}{meta.languages ? ` (${meta.languages})` : ""}</td></tr>
+              <tr><td className="pr-3">platform</td><td>{meta.platform || "—"}</td></tr>
+              <tr><td className="pr-3">screen</td><td>{meta.screen}</td></tr>
+              <tr><td className="pr-3">cpu cores</td><td>{meta.cores || "—"}</td></tr>
+              {meta.memoryGB ? <tr><td className="pr-3">memory</td><td>{meta.memoryGB} GB</td></tr> : null}
+              {meta.connection ? <tr><td className="pr-3">connection</td><td>{meta.connection}</td></tr> : null}
+              <tr><td className="pr-3">cookies</td><td>{meta.cookies ? "enabled" : "disabled"}</td></tr>
+              <tr><td className="pr-3">do not track</td><td>{meta.doNotTrack || "not set"}</td></tr>
+              <tr><td className="pr-3">touch</td><td>{meta.touch ? "yes" : "no"}</td></tr>
+              <tr><td className="pr-3">online</td><td>{meta.online ? "yes" : "no"}</td></tr>
+            </tbody>
+          </table>
+          <p className="mt-1 break-all font-mono text-[11px] text-neutral-500">{meta.userAgent}</p>
+        </>
+      )}
+    </InfoCard>
+  );
+}
+
+export function StatsCard() {
+  const identity = useAppIdentity();
+  const [stats, setStats] = useState<UserStats | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  if (identity?.username && !loaded) {
+    setLoaded(true);
+    fetchMyStats().then(setStats).catch(() => {});
+  }
+  return (
+    <InfoCard title="📊 your numbers (server-side)">
+      {!identity?.username && (
+        <span className="text-neutral-600">claim a username to see your stats</span>
+      )}
+      {identity?.username && !loaded && <span className="text-neutral-600">loading…</span>}
+      {identity?.username && loaded && !stats && (
+        <span className="text-neutral-600">stats unavailable — backend may be outdated</span>
+      )}
+      {stats && (
+        <table className="w-full text-[13px]">
+          <tbody>
+            <tr><td className="pr-3">casts</td><td><b>{stats.casts}</b></td></tr>
+            <tr><td className="pr-3">replies</td><td><b>{stats.replies}</b></td></tr>
+            <tr>
+              <td className="pr-3">picked up by someone</td>
+              <td>
+                <b>{stats.castsDelivered}</b>
+                {stats.casts + stats.replies > 0 && (
+                  <span className="text-neutral-600"> ({Math.round((stats.castsDelivered / (stats.casts + stats.replies)) * 100)}%)</span>
+                )}
+              </td>
+            </tr>
+            <tr><td className="pr-3">fully delivered</td><td><b>{stats.castsExhausted}</b></td></tr>
+            <tr><td className="pr-3">bottles received</td><td><b>{stats.received}</b></td></tr>
+            <tr><td className="pr-3">delivery claims</td><td><b>{stats.claims}</b></td></tr>
+            <tr><td className="pr-3">keys deposited</td><td><b>{stats.keysDeposited}</b></td></tr>
+            <tr><td className="pr-3">users blocked</td><td><b>{stats.usersBlocked}</b></td></tr>
+            <tr><td className="pr-3">reports filed</td><td><b>{stats.reportsFiled}</b></td></tr>
+            <tr><td className="pr-3">times reported</td><td><b>{stats.timesReported}</b></td></tr>
+            <tr>
+              <td className="pr-3">member since</td>
+              <td>{stats.memberSince ? new Date(stats.memberSince * 1000).toLocaleDateString() : "—"}</td>
+            </tr>
+            <tr>
+              <td className="pr-3">last activity</td>
+              <td>{stats.lastActivity ? new Date(stats.lastActivity * 1000).toLocaleString() : "—"}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+    </InfoCard>
   );
 }
 

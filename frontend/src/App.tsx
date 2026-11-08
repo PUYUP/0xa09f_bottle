@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useApp } from "./hooks/useApp";
-import { AccountPanel, MyKeysPanel, PoolPanel, VaultButtons } from "./components/Panels";
+import { AccountPanel, DeviceCard, MyKeysPanel, PoolPanel, StatsCard, VaultButtons } from "./components/Panels";
 import { ThreadList } from "./components/Thread";
 import { BOTTLE_QUOTA, MAX_LOCAL_KEYS } from "./lib/crypto";
 import {
@@ -191,7 +191,13 @@ export default function App() {
 
       {page === "bait" && <MyKeysPanel onClose={() => setPage("catch")} />}
       {page === "pool" && <PoolPanel onClose={() => setPage("catch")} />}
-      {page === "account" && <AccountPanel onClose={() => setPage("catch")} />}
+      {page === "account" && (
+        <>
+          <AccountPanel onClose={() => setPage("catch")} />
+          <DeviceCard />
+          <StatsCard />
+        </>
+      )}
 
       {/* ── catch page ─────────────────────────────────────── */}
       {page === "catch" && (
