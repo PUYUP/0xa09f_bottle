@@ -158,7 +158,7 @@ export default function App() {
                 onClick={() => setClaimName(genName())}
                 title="random username"
               >
-                ⚄
+                <IonIcon icon={refresh} slot="icon-only" />
               </IonButton>
             </IonItem>
             <IonButton

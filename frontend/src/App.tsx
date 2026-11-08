@@ -58,11 +58,14 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
               autoFocus
             />
             <button
-              className="retro-btn"
+              className="retro-btn flex items-center justify-center px-3"
               title="random username"
               onClick={() => setName(genName())}
             >
-              ⚄
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+                <path d="M21 3v6h-6" />
+              </svg>
             </button>
           </div>
           {err && <div className="text-[13px] text-red-700">{err}</div>}
