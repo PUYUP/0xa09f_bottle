@@ -301,7 +301,14 @@ export default function App() {
           </span>
         </div>
         <div className="retro-body">
-          {!detailNode && <BaitLine />}
+          {!detailNode && (
+            <BaitLine
+              onOpen={(bottleId) => {
+                openThread(bottleId).catch(() => {});
+                setDetailPath([bottleId]);
+              }}
+            />
+          )}
           {detailNode && (
             <div className="mb-2 text-[13px] text-neutral-600">
               <span className="retro-link" onClick={() => setDetailPath([])}>📬 catch</span>

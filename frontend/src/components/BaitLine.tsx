@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../hooks/useApp";
-import { baitStatus, dismissEatenBait } from "../lib/store";
+import { baitStatus, dismissEatenBait, openThread } from "../lib/store";
 import type { KeyRecord } from "../lib/types";
 
 const STATUS_META: Record<string, { emoji: string; label: string; cls: string }> = {
@@ -16,7 +16,7 @@ const STATUS_META: Record<string, { emoji: string; label: string; cls: string }>
 // key still in the pool bobs gently, a freshly consumed one plays an "eaten"
 // animation, and tapping an eaten bait marks its catch read and clears the
 // slot from the line.
-export function BaitLine() {
+export function BaitLine({ onOpen }: { onOpen?: (bottleId: string) => void }) {
   const { keys, ownPoolKids, records } = useApp();
   const [eaten, setEaten] = useState<Map<string, number>>(new Map());
   const prevPool = useRef<Set<string> | null>(null);
@@ -67,6 +67,20 @@ export function BaitLine() {
     const anim =
       status === "active" ? "bait-bob" : eaten.has(k.kid) ? "bait-eaten" : "";
     const dismissible = status === "eaten" || status === "lost";
+    // Tapping an eaten/lost bait opens the message it caught (latest catch
+    // for that kid, preferring unread), then clears the slot.
+    const openCatch = async () => {
+      const catches = records
+        .filter((r) => r.id.startsWith("caught:") && r.kid === k.kid)
+        .sort((a, b) => Number(!!a.readAt) - Number(!!b.readAt) || (b.caughtAt || 0) - (a.caughtAt || 0));
+      const target = catches[0];
+      if (target) {
+        const bottleId = target.id.slice("caught:".length);
+        await openThread(bottleId).catch(() => {});
+        onOpen?.(bottleId);
+      }
+      await dismissEatenBait(k.kid).catch(() => {});
+    };
     const inner = (
       <>
         {unreadKids.has(k.kid) && <span className="bait-unread-dot">!</span>}
@@ -86,7 +100,7 @@ export function BaitLine() {
           type="button"
           className={cls}
           title={title}
-          onClick={() => dismissEatenBait(k.kid).catch(() => {})}
+          onClick={() => openCatch()}
         >
           {inner}
         </button>
@@ -110,7 +124,7 @@ export function BaitLine() {
   return (
     <div className="mb-2">
       <div className="text-[12px] italic text-neutral-600">
-        your bait line — 🎣 waiting · 😋 just eaten · 🫥 lost? · ❗ unread catch · tap 😋 to clear
+        your bait line — 🎣 waiting · 😋 just eaten · 🫥 lost? · ❗ unread catch · tap 😋 to open catch
       </div>
       <div className="bait-line bevel-in">{visible.map(slot)}</div>
     </div>
