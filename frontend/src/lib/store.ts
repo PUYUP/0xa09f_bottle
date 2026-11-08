@@ -158,6 +158,11 @@ export async function depositUndeposited(ttlRaw: string): Promise<number> {
     (k) => !k.depositedAt || (k.expiresAt && k.expiresAt <= now)
   );
   if (!pending.length) return 0;
+  // Owner tag = hash of our identity pubkey: the pool hands out at most one
+  // key per owner per fetch, so a single cast can't drain several of our
+  // keys. Self-declared and pseudonymous — spoofing only skews our own odds.
+  const idt = await getIdentity().catch(() => null);
+  const owner = idt?.publicJwk ? await deriveUserId(idt.publicJwk) : "";
   await api("/api/pool/deposit", {
     method: "POST",
     body: JSON.stringify({
@@ -166,6 +171,7 @@ export async function depositUndeposited(ttlRaw: string): Promise<number> {
         publicKey: JSON.stringify(k.publicJwk),
         ttlSeconds: ttl,
         tzOffset: -new Date().getTimezoneOffset(),
+        owner,
       })),
     }),
   });
@@ -212,6 +218,9 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
   const fetched = await api<{ keys?: { kid: string; publicKey: string }[] }>("/api/pool/fetch", {
     method: "POST",
     body: JSON.stringify({
+      // Multi-recipient cast: up to BOTTLE_QUOTA keys, but the pool fetch
+      // dedupes by owner tag so a single cast takes at most one key per
+      // user — it can't drain several keys deposited by the same person.
       count: BOTTLE_QUOTA,
       exclude: state.keys.map((k) => k.kid),
       tzOffset: -new Date().getTimezoneOffset(),

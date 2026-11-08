@@ -45,6 +45,9 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 		if tz := req.Keys[i].TZOffset; tz != nil && (*tz < -720 || *tz > 840) {
 			return fiber.NewError(fiber.StatusBadRequest, "tzOffset must be -720..840")
 		}
+		if len(req.Keys[i].Owner) > 128 {
+			return fiber.NewError(fiber.StatusBadRequest, "owner too long")
+		}
 		req.Keys[i].ExpiresAt = 0
 	}
 	if err := s.store.DepositKeys(c.Context(), req.Keys); err != nil {

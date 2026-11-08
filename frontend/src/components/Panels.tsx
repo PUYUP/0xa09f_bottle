@@ -11,6 +11,7 @@ import {
   getClientMeta,
   importVaultFile,
   log,
+  refreshActivePoolKeys,
   refreshBlocks,
   refreshPoolKeys,
   unblockUser,
@@ -46,6 +47,11 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
   const { keys, ownPoolKids, activePoolKeys } = useApp();
   const [shown, setShown] = useState(BAIT_PAGE);
   const visible = keys.slice(0, shown);
+  const [refreshed, setRefreshed] = useState(false);
+  if (!refreshed) {
+    setRefreshed(true);
+    refreshActivePoolKeys().catch(() => {});
+  }
   return (
     <Panel title={`🪱 my bait (${keys.length})`} onClose={onClose}>
       <div className="max-h-80 overflow-y-auto">
@@ -103,6 +109,7 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
   if (!loaded) {
     setLoaded(true);
     refreshPoolKeys(0).catch((e) => log(`pool: ${(e as Error).message}`, "err"));
+    refreshActivePoolKeys().catch(() => {});
   }
   const own = keys.filter((k) => ownPoolKids.has(k.kid));
   const others = (poolKeys ?? []).filter((k) => !ownPoolKids.has(k.kid));

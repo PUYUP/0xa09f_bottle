@@ -33,8 +33,13 @@ type PoolKey struct {
 	// TZOffset is minutes east of UTC (-720..840), self-declared by the
 	// depositing client. Used to bias fetches toward the requester's
 	// timezone zone. Nil means unknown (legacy deposits).
-	TZOffset   *int `json:"tzOffset,omitempty"`
-	DepositedN int  `json:"-"`
+	TZOffset *int `json:"tzOffset,omitempty"`
+	// Owner is a self-declared owner tag (e.g. hash of the depositor's
+	// identity pubkey). Fetches hand out at most one key per owner so a
+	// single cast cannot drain several keys of the same user. Spoofing it
+	// only skews the spoofer's own distribution — it reveals nothing.
+	Owner      string `json:"owner,omitempty"`
+	DepositedN int    `json:"-"`
 }
 
 type Envelope struct {
@@ -117,6 +122,7 @@ type poolMember struct {
 	PK  string `json:"p"`
 	Exp int64  `json:"e"`
 	TZ  *int   `json:"t,omitempty"`
+	O   string `json:"o,omitempty"`
 }
 
 func encodePoolMember(k PoolKey, expiresAt int64) (string, error) {
@@ -130,7 +136,7 @@ func encodePoolMember(k PoolKey, expiresAt int64) (string, error) {
 	if jwk.X == "" || jwk.Y == "" {
 		return "", errors.New("publicKey missing x/y coordinates")
 	}
-	raw, err := json.Marshal(poolMember{KID: k.KID, PK: jwk.X + "." + jwk.Y, Exp: expiresAt, TZ: k.TZOffset})
+	raw, err := json.Marshal(poolMember{KID: k.KID, PK: jwk.X + "." + jwk.Y, Exp: expiresAt, TZ: k.TZOffset, O: k.Owner})
 	if err != nil {
 		return "", err
 	}
@@ -147,7 +153,7 @@ func decodePoolMember(raw string) (PoolKey, bool) {
 		return PoolKey{}, false
 	}
 	pub := fmt.Sprintf(`{"kty":"EC","crv":"P-256","x":%q,"y":%q}`, parts[0], parts[1])
-	return PoolKey{KID: m.KID, PublicKey: pub, ExpiresAt: m.Exp, TZOffset: m.TZ}, true
+	return PoolKey{KID: m.KID, PublicKey: pub, ExpiresAt: m.Exp, TZOffset: m.TZ, Owner: m.O}, true
 }
 
 func poolKeyFromMember(raw string) (PoolKey, bool) {
@@ -251,8 +257,8 @@ local zoneWant = 0
 if tz ~= nil then zoneWant = math.floor(count * 0.6 + 0.5) end
 local function parse(m)
   local ok, obj = pcall(cjson.decode, m)
-  if not ok or type(obj) ~= 'table' then return nil, nil end
-  return obj.k or obj.kid, tonumber(obj.t)
+  if not ok or type(obj) ~= 'table' then return nil, nil, nil end
+  return obj.k or obj.kid, tonumber(obj.t), obj.o or ''
 end
 local function inZone(t)
   if tz == nil or t == nil then return false end
@@ -266,9 +272,20 @@ local card = redis.call('ZCARD', KEYS[1])
 if card == 0 then return {} end
 if count > card then count = card end
 local used = {}
+-- Owner dedupe: at most one picked key per non-empty owner tag, so a single
+-- fetch cannot drain several keys deposited by the same user. Members
+-- without an owner tag (legacy deposits) are always eligible.
+local usedOwners = {}
+local function ownerOk(o)
+  return o == nil or o == '' or usedOwners[o] == nil
+end
+local function markOwner(o)
+  if o ~= nil and o ~= '' then usedOwners[o] = true end
+end
 local function pick(wantZone)
   local guard = 0
   local fallback = nil
+  local fallbackOwner = nil
   while guard < 80 do
     guard = guard + 1
     local rank = math.random(0, card - 1)
@@ -276,16 +293,21 @@ local function pick(wantZone)
       used[rank] = true
       local m = redis.call('ZRANGE', KEYS[1], rank, rank)[1]
       if m then
-        local kid, t = parse(m)
-        if not (kid ~= nil and exclude[kid] == true) then
+        local kid, t, o = parse(m)
+        if not (kid ~= nil and exclude[kid] == true) and ownerOk(o) then
           if (wantZone and inZone(t)) or not wantZone then
+            markOwner(o)
             return m
           end
-          if fallback == nil then fallback = m end
+          if fallback == nil then
+            fallback = m
+            fallbackOwner = o
+          end
         end
       end
     end
   end
+  if fallback ~= nil then markOwner(fallbackOwner) end
   return fallback
 end
 local members = {}
