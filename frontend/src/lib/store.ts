@@ -89,11 +89,36 @@ export function log(msg: string, cls: LogEntry["cls"] = "") {
 
 // ---------- keys ----------
 
+let profileSynced = false;
+
+// syncProfile reconciles the local identity record with PG — the users
+// table is the source of truth for username/userId. Runs once per session
+// on load so IndexedDB never drifts from server-side identity.
+export async function syncProfile() {
+  if (profileSynced) return;
+  profileSynced = true;
+  try {
+    const id = await getIdentity();
+    if (!id.username) return; // the username gate forces a claim, which syncs
+    const { user } = await api<{ user?: { id?: string; username?: string } }>("/api/me");
+    if (!user?.username) return;
+    if (user.username !== id.username || (user.id && user.id !== id.userId)) {
+      id.username = user.username;
+      id.userId = user.id || id.userId;
+      await idbPut(META_STORE, id);
+      log(`profile synced: @${user.username}`);
+    }
+  } catch {
+    profileSynced = false; // retry on next load
+  }
+}
+
 export async function loadKeys() {
   const keyRecords = (await idbGetAll<KeyRecord>(KEY_STORE)) as KeyRecord[];
   keyRecords.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   setState({ keys: keyRecords });
   await refreshActivePoolKeys();
+  syncProfile().catch(() => {});
 }
 
 function keyByKidMap(): Map<string, KeyRecord> {
@@ -105,12 +130,51 @@ export async function refreshActivePoolKeys() {
   setState({ activePoolKeys: count });
 }
 
+// baitStatus derives the persisted pool-state of a key record. "lost" is only
+// assigned by fetchPoolStatus (server-verified absent-but-alive); locally we
+// can't distinguish eaten from lost without asking the server.
+export type BaitStatus = "pending" | "active" | "eaten" | "expired" | "lost";
+
+export function baitStatus(k: KeyRecord, inPool?: boolean): BaitStatus {
+  if (!k.depositedAt) return "pending";
+  if (k.expiresAt && k.expiresAt <= Date.now()) return "expired";
+  if (inPool ?? ownPoolKidsHas(k.kid)) return "active";
+  return "eaten";
+}
+
+function ownPoolKidsHas(kid: string): boolean {
+  return state.ownPoolKids.has(kid);
+}
+
+// syncBaitStatuses recomputes status for every key after a pool refresh and
+// persists the ones that changed, so IndexedDB always carries the last known
+// state even across reloads.
+async function syncBaitStatuses(inPool: Set<string>): Promise<void> {
+  const now = Date.now();
+  const changed: KeyRecord[] = [];
+  const next = state.keys.map((k) => {
+    let s: BaitStatus;
+    if (!k.depositedAt) s = "pending";
+    else if (k.expiresAt && k.expiresAt <= now) s = "expired";
+    else if (inPool.has(k.kid)) s = "active";
+    else s = k.status === "lost" ? "lost" : "eaten";
+    if (s === k.status) return k;
+    const rec = { ...k, status: s };
+    changed.push(rec);
+    return rec;
+  });
+  if (!changed.length) return;
+  setState({ keys: next });
+  await Promise.all(changed.map((k) => idbPut(KEY_STORE, k)));
+}
+
 async function ownKeysInPool(): Promise<number> {
   try {
     const { kids = [] } = await api<{ kids?: string[] }>("/api/pool/kids?limit=20000", { auth: false });
     const pool = new Set(kids);
     const own = new Set(state.keys.filter((k) => pool.has(k.kid)).map((k) => k.kid));
     setState({ ownPoolKids: own });
+    await syncBaitStatuses(own);
     return own.size;
   } catch {
     setState({ ownPoolKids: new Set() });
@@ -179,6 +243,7 @@ export async function depositUndeposited(ttlRaw: string): Promise<number> {
   for (const k of pending) {
     k.depositedAt = now;
     k.expiresAt = expiresAt;
+    k.status = "active";
     await idbPut(KEY_STORE, k);
   }
   await loadKeys();
@@ -275,6 +340,7 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     id: bottleId,
     createdAt: Math.floor(Date.now() / 1000),
     depth: 1,
+    rootId: "",
     maxDeliveries: envelopes.length,
     payloadIv: bytesToB64(payloadIV),
     ciphertext: bytesToB64(new Uint8Array(ciphertext)),
@@ -298,6 +364,7 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     id: bottleId,
     createdAt: Math.floor(Date.now() / 1000),
     depth: 1,
+    rootId: "",
     maxDeliveries: envelopes.length,
     status: "ACTIVE",
   }, { v: 1, text: trimmed, reply: replyPair.publicJwk }, "");
@@ -343,6 +410,10 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
   const selfKid = `${SELF_PREFIX}${await deriveUserId(identity.publicJwk)}`;
   const selfEnv = await wrapSessionKey(bottleId, identity.publicJwk, rawSessionKey, selfKid);
   selfEnv.kid = selfKid;
+  // rootId = the thread's first message id: inherit the parent's rootId,
+  // or use the parent's own id when replying to a root (or a legacy reply
+  // that predates the field).
+  const rootId = bottle.rootId || bottle.id;
   await api("/api/bottles", {
     method: "POST",
     body: JSON.stringify({
@@ -350,6 +421,7 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
       createdAt: Math.floor(Date.now() / 1000),
       depth,
       parentId: bottle.id,
+      rootId,
       maxDeliveries: 1,
       payloadIv: bytesToB64(payloadIV),
       ciphertext: bytesToB64(new Uint8Array(ciphertext)),
@@ -361,6 +433,7 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
     createdAt: Math.floor(Date.now() / 1000),
     depth,
     parentId: bottle.id,
+    rootId,
     maxDeliveries: 1,
     status: "ACTIVE",
   }, { v: 1, text: text.trim(), reply: replyJwk }, env.kid!);
@@ -648,6 +721,7 @@ export async function openThread(bottleId: string) {
     const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottleId}`).catch(() => null);
     if (rec) {
       rec.repliesSeenAt = seen;
+      rec.readAt = seen;
       await idbPut(META_STORE, rec).catch(() => {});
     }
   }
@@ -915,7 +989,7 @@ export async function importVaultFile(file: File) {
   const blob = JSON.parse(text) as Parameters<typeof decryptVault>[0];
   const payload = (await decryptVault(blob, passphrase)) as {
     version?: number;
-    keys?: { kid?: string; jwk?: JWK; privateJwk?: JWK; publicJwk?: JWK; createdAt?: number; depositedAt?: number | null; expiresAt?: number | null }[];
+    keys?: { kid?: string; jwk?: JWK; privateJwk?: JWK; publicJwk?: JWK; createdAt?: number; depositedAt?: number | null; expiresAt?: number | null; status?: string }[];
     identity?: JWK | null;
     replies?: { id?: string; jwk?: JWK }[];
     meta?: ThreadRecord[];
@@ -928,6 +1002,7 @@ export async function importVaultFile(file: File) {
   popTokens.clear();
   sharedBitsCache.clear();
   caughtThisSession.clear();
+  profileSynced = false;
   let restored = 0;
 
   if (payload.version === 4) {
@@ -941,6 +1016,7 @@ export async function importVaultFile(file: File) {
         publicJwk: publicFromPrivate(k.jwk),
         createdAt: Date.now(),
         depositedAt: null,
+        status: "pending",
       });
       restored++;
     }
@@ -974,6 +1050,7 @@ export async function importVaultFile(file: File) {
         createdAt: k.createdAt || Date.now(),
         depositedAt: k.depositedAt || null,
         expiresAt: k.expiresAt || null,
+        status: k.status || (k.depositedAt ? "active" : "pending"),
       });
       restored++;
     }
@@ -988,6 +1065,7 @@ export async function importVaultFile(file: File) {
   resetIdentityCache();
   await getIdentity().catch(() => null);
   await loadKeys();
+  await hydrateKeyMetadata();
   await renderInbox();
   log(`imported vault with ${restored} key(s) restored`);
 }
@@ -999,6 +1077,7 @@ export interface PoolKeyStatus {
   inPool: boolean;
   registered: boolean;
   consumed: boolean;
+  createdAt?: number; // unix seconds — first deposit time
   expiresAt: number; // unix seconds, 0 when unregistered
 }
 
@@ -1014,7 +1093,80 @@ export async function fetchPoolStatus(kids: string[]): Promise<PoolKeyStatus[]> 
     });
     out.push(...res);
   }
+  // Persist server-verified states: a key absent from the pool that the
+  // registry says is neither consumed nor expired is "lost" (e.g. Redis
+  // collapse) — everything else falls back to the locally derived status.
+  const byKid = new Map(out.map((s) => [s.kid, s]));
+  const nowSec = Math.floor(Date.now() / 1000);
+  const writes: Promise<unknown>[] = [];
+  const next = state.keys.map((k) => {
+    const s = byKid.get(k.kid);
+    if (!s || s.inPool) return k;
+    let status: BaitStatus;
+    if (s.expiresAt && s.expiresAt <= nowSec) status = "expired";
+    else if (s.consumed) status = "eaten";
+    else status = "lost";
+    if (status === k.status) return k;
+    const rec = { ...k, status };
+    writes.push(idbPut(KEY_STORE, rec));
+    return rec;
+  });
+  if (writes.length) {
+    setState({ keys: next });
+    await Promise.all(writes);
+  }
   return out;
+}
+
+// hydrateKeyMetadata rebuilds depositedAt/expiresAt/status from the server
+// after a vault import. The vault carries only private key material by
+// design; the pool registry (PG) + Redis membership are the source of truth
+// for pool metadata, so a wiped IndexedDB fully recovers key state.
+async function hydrateKeyMetadata() {
+  const kids = state.keys.map((k) => k.kid);
+  if (!kids.length) return;
+  let statuses: PoolKeyStatus[];
+  try {
+    statuses = await fetchPoolStatus(kids);
+  } catch {
+    return; // offline — keys stay pending until the next status check
+  }
+  const byKid = new Map(statuses.map((s) => [s.kid, s]));
+  const nowMs = Date.now();
+  const nowSec = Math.floor(nowMs / 1000);
+  const writes: Promise<unknown>[] = [];
+  const next = state.keys.map((k) => {
+    const s = byKid.get(k.kid);
+    if (!s) return k;
+    const known = s.registered || s.inPool;
+    const depositedAt = s.createdAt ? s.createdAt * 1000 : nowMs;
+    const expiresAt = s.expiresAt ? s.expiresAt * 1000 : k.expiresAt ?? null;
+    let status: BaitStatus = "pending";
+    if (known) {
+      if (s.inPool) status = "active";
+      else if (s.expiresAt && s.expiresAt <= nowSec) status = "expired";
+      else if (s.consumed) status = "eaten";
+      else status = "lost";
+    }
+    const rec: KeyRecord = {
+      ...k,
+      depositedAt: known ? depositedAt : null,
+      expiresAt: known ? expiresAt : k.expiresAt ?? null,
+      status,
+    };
+    if (
+      rec.depositedAt !== k.depositedAt ||
+      rec.expiresAt !== k.expiresAt ||
+      rec.status !== k.status
+    ) {
+      writes.push(idbPut(KEY_STORE, rec));
+    }
+    return rec;
+  });
+  if (writes.length) {
+    setState({ keys: next });
+    await Promise.all(writes);
+  }
 }
 
 // restorePoolKeys re-deposits the given key records with their remaining
@@ -1045,6 +1197,7 @@ export async function restorePoolKeys(records: KeyRecord[]) {
       : 86400;
     k.depositedAt = now;
     k.expiresAt = now + ttl * 1000;
+    k.status = "active";
     await idbPut(KEY_STORE, k);
   }
   await loadKeys();

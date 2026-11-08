@@ -13,6 +13,8 @@ export interface KeyRecord {
   createdAt: number;
   depositedAt: number | null;
   expiresAt?: number | null;
+  // last synced bait status: "pending" | "active" | "eaten" | "expired" | "lost"
+  status?: string;
 }
 
 export interface IdentityRecord {
@@ -37,6 +39,7 @@ export interface Bottle {
   createdAt: number;
   depth?: number;
   parentId?: string;
+  rootId?: string;
   maxDeliveries: number;
   payloadIv?: string;
   ciphertext?: string;
@@ -69,6 +72,7 @@ export interface ThreadRecord {
   childCount?: number;
   lastChildAt?: number;
   repliesSeenAt?: number;
+  readAt?: number;
   privateJwk?: JWK;
   publicJwk?: JWK;
   createdAt?: number;

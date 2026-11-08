@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS bottles (
   created_at      BIGINT NOT NULL,
   depth           INT NOT NULL DEFAULT 1,
   parent_id       TEXT NOT NULL DEFAULT '',
+  root_id         TEXT NOT NULL DEFAULT '',
   max_deliveries  INT NOT NULL,
   deliveries      INT NOT NULL DEFAULT 0,
   status          TEXT NOT NULL,
@@ -28,6 +29,8 @@ CREATE TABLE IF NOT EXISTS bottles (
 );
 CREATE INDEX IF NOT EXISTS bottles_created_at_idx ON bottles (created_at DESC);
 CREATE INDEX IF NOT EXISTS bottles_parent_id_idx ON bottles (parent_id) WHERE parent_id <> '';
+CREATE INDEX IF NOT EXISTS bottles_root_id_idx ON bottles (root_id) WHERE root_id <> '';
+ALTER TABLE bottles ADD COLUMN IF NOT EXISTS root_id TEXT NOT NULL DEFAULT '';
 
 -- One row per envelope kid: the index behind "bottles involving me"
 -- queries (recipient pool kids, self:<userId> sender marker, reply:<id>).
@@ -216,8 +219,8 @@ func (p *PGStore) SaveBottle(ctx context.Context, b store.Bottle) error {
 	}
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, `
-INSERT INTO bottles (id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+INSERT INTO bottles (id, created_at, depth, parent_id, root_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids)
+VALUES ($1,$2,$3,$4,$12,$5,$6,$7,$8,$9,$10,$11)
 ON CONFLICT (id) DO UPDATE SET
   deliveries = GREATEST(bottles.deliveries, EXCLUDED.deliveries),
   status = CASE WHEN bottles.status = 'EXHAUSTED' OR EXCLUDED.status = 'EXHAUSTED' THEN 'EXHAUSTED' ELSE EXCLUDED.status END,
@@ -229,7 +232,7 @@ ON CONFLICT (id) DO UPDATE SET
     ELSE bottles.delivered_kids
   END`,
 		b.ID, b.CreatedAt, b.Depth, b.ParentID, b.MaxDeliveries, b.Deliveries, b.Status,
-		b.PayloadIV, b.Ciphertext, string(envelopes), string(kidsJSON))
+		b.PayloadIV, b.Ciphertext, string(envelopes), string(kidsJSON), b.RootID)
 	if err != nil {
 		return err
 	}
@@ -316,6 +319,7 @@ WHERE kid = ANY($1::text[]) AND consumed_at = 0`, kids, time.Now().Unix())
 // (explicit consumed_at, or implied by appearing in bottle_kids for
 // consumption that predates the column).
 type PoolKeyState struct {
+	CreatedAt int64
 	ExpiresAt int64
 	Consumed  bool
 	Found     bool
@@ -329,7 +333,7 @@ func (p *PGStore) PoolKeyStates(ctx context.Context, kids []string) (map[string]
 		return out, nil
 	}
 	rows, err := p.pool.Query(ctx, `
-SELECT kid, expires_at, consumed_at,
+SELECT kid, created_at, expires_at, consumed_at,
        EXISTS(SELECT 1 FROM bottle_kids bk WHERE bk.kid = key_registry.kid) AS in_bottles
 FROM key_registry
 WHERE kid = ANY($1::text[])`, kids)
@@ -342,7 +346,7 @@ WHERE kid = ANY($1::text[])`, kids)
 		var st PoolKeyState
 		var consumedAt int64
 		var inBottles bool
-		if err := rows.Scan(&kid, &st.ExpiresAt, &consumedAt, &inBottles); err != nil {
+		if err := rows.Scan(&kid, &st.CreatedAt, &st.ExpiresAt, &consumedAt, &inBottles); err != nil {
 			return nil, err
 		}
 		st.Found = true
@@ -430,7 +434,7 @@ func (p *PGStore) ListBottles(ctx context.Context, limit, offset int) ([]store.B
 		offset = 0
 	}
 	rows, err := p.pool.Query(ctx, `
-SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
+SELECT id, created_at, depth, parent_id, root_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
 ORDER BY created_at DESC, id COLLATE "C" DESC
 LIMIT $1 OFFSET $2`, limit, offset)
@@ -443,7 +447,7 @@ LIMIT $1 OFFSET $2`, limit, offset)
 	for rows.Next() {
 		var b store.Bottle
 		var envelopes, kids []byte
-		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.MaxDeliveries,
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.RootID, &b.MaxDeliveries,
 			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &kids); err != nil {
 			return nil, err
 		}
@@ -466,7 +470,7 @@ func (p *PGStore) ListChildren(ctx context.Context, parentID string, limit int) 
 		limit = 1000
 	}
 	rows, err := p.pool.Query(ctx, `
-SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
+SELECT id, created_at, depth, parent_id, root_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
 WHERE parent_id = $1
 ORDER BY created_at ASC, id COLLATE "C" ASC
@@ -480,7 +484,7 @@ LIMIT $2`, parentID, limit)
 	for rows.Next() {
 		var b store.Bottle
 		var envelopes, kids []byte
-		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.MaxDeliveries,
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.RootID, &b.MaxDeliveries,
 			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &kids); err != nil {
 			return nil, err
 		}
@@ -505,7 +509,7 @@ func (p *PGStore) ListBottlesByKids(ctx context.Context, kids []string, limit in
 		return []store.Bottle{}, nil
 	}
 	rows, err := p.pool.Query(ctx, `
-SELECT DISTINCT b.id, b.created_at, b.depth, b.parent_id, b.max_deliveries, b.deliveries, b.status, b.payload_iv, b.ciphertext, b.envelopes, b.delivered_kids
+SELECT DISTINCT b.id, b.created_at, b.depth, b.parent_id, b.root_id, b.max_deliveries, b.deliveries, b.status, b.payload_iv, b.ciphertext, b.envelopes, b.delivered_kids
 FROM bottles b
 JOIN bottle_kids k ON k.bottle_id = b.id
 WHERE k.kid = ANY($1::text[])
@@ -521,7 +525,7 @@ LIMIT $4`, kids, beforeCreatedAt, beforeID, limit)
 	for rows.Next() {
 		var b store.Bottle
 		var envelopes, delivered []byte
-		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.MaxDeliveries,
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.RootID, &b.MaxDeliveries,
 			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &delivered); err != nil {
 			return nil, err
 		}
@@ -568,7 +572,7 @@ func (p *PGStore) ListBottlesCursor(ctx context.Context, limit int, beforeCreate
 		limit = 50
 	}
 	query := `
-SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
+SELECT id, created_at, depth, parent_id, root_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
 FROM bottles
 WHERE ($1 = 0 OR created_at < $1 OR (created_at = $1 AND id COLLATE "C" < $2))
 ORDER BY created_at DESC, id COLLATE "C" DESC
@@ -583,7 +587,7 @@ LIMIT $3`
 	for rows.Next() {
 		var b store.Bottle
 		var envelopes, kids []byte
-		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.MaxDeliveries,
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.RootID, &b.MaxDeliveries,
 			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &kids); err != nil {
 			return nil, err
 		}

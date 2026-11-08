@@ -141,6 +141,7 @@ type poolStatusEntry struct {
 	InPool     bool   `json:"inPool"`
 	Registered bool   `json:"registered"`
 	Consumed   bool   `json:"consumed"`
+	CreatedAt  int64  `json:"createdAt"`
 	ExpiresAt  int64  `json:"expiresAt"`
 }
 
@@ -190,6 +191,7 @@ func (s *Server) poolStatus(c fiber.Ctx) error {
 		if st, ok := reg[kid]; ok {
 			entry.Registered = st.Found
 			entry.Consumed = st.Consumed
+			entry.CreatedAt = st.CreatedAt
 			entry.ExpiresAt = st.ExpiresAt
 		}
 		out = append(out, entry)

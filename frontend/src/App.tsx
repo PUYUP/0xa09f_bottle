@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useApp } from "./hooks/useApp";
 import { AccountPanel, DeviceCard, MyKeysPanel, PoolPanel, StatsCard, VaultButtons } from "./components/Panels";
 import { ThreadList, countReplies, findNode } from "./components/Thread";
+import { BaitLine } from "./components/BaitLine";
 import { BOTTLE_QUOTA, MAX_LOCAL_KEYS } from "./lib/crypto";
 import {
   buildThreads,
@@ -297,6 +298,7 @@ export default function App() {
           </span>
         </div>
         <div className="retro-body">
+          {!detailNode && <BaitLine />}
           {detailNode && (
             <div className="mb-2 text-[13px] text-neutral-600">
               <span className="retro-link" onClick={() => setDetailPath([])}>📬 catch</span>

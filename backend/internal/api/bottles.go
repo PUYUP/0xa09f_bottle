@@ -70,6 +70,9 @@ func validateBottle(b store.Bottle) error {
 	if b.ParentID != "" && (len(b.ParentID) > 128 || !validBottleID(b.ParentID)) {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid parentId")
 	}
+	if b.RootID != "" && (len(b.RootID) > 128 || !validBottleID(b.RootID)) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid rootId")
+	}
 	// Envelopes may exceed maxDeliveries by one: clients append a self-addressed
 	// archive envelope (kid "self:...") so sent plaintext stays recoverable.
 	// It never claims a delivery slot, so EXHAUSTED math is unaffected.

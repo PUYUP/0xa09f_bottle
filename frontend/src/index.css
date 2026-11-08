@@ -216,3 +216,88 @@ hr.retro-hr {
 .msg.clickable:hover {
   background: #f4f4f4;
 }
+
+/* bait line — your deposited keys as lures waiting for bites */
+.bait-line {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px 4px;
+  min-height: 76px;
+  align-items: flex-end;
+}
+.bait-slot {
+  position: relative;
+  flex: 0 0 auto;
+  width: 72px;
+  padding: 6px 4px 4px;
+  text-align: center;
+  border: 1px solid #999;
+  background: #fdf6e3;
+  font-size: 11px;
+}
+.bait-slot .bait-emoji {
+  font-size: 22px;
+  line-height: 1.1;
+  display: block;
+}
+.bait-slot .bait-kid {
+  font-family: monospace;
+  color: #666;
+  font-size: 10px;
+}
+.bait-slot.pending {
+  border-style: dashed;
+  opacity: 0.55;
+}
+.bait-slot.used {
+  opacity: 0.45;
+  filter: grayscale(0.7);
+}
+.bait-slot.expired {
+  opacity: 0.3;
+  filter: grayscale(1);
+}
+.bait-bob {
+  animation: baitBob 2.4s ease-in-out infinite;
+}
+@keyframes baitBob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+.bait-eaten {
+  animation: baitEaten 3.2s ease-out forwards;
+}
+@keyframes baitEaten {
+  0% { transform: scale(1) rotate(0deg); opacity: 1; }
+  25% { transform: scale(1.35) rotate(-8deg); }
+  60% { transform: scale(0.85) rotate(6deg); opacity: 0.9; }
+  100% { transform: scale(0.4) translateY(10px); opacity: 0; }
+}
+.bait-unread-dot {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #c0392b;
+  color: #fff;
+  font-size: 10px;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: baitPulse 1s ease-in-out infinite;
+}
+@keyframes baitPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.25); }
+}
+.bait-slot .bait-status {
+  display: block;
+  font-size: 9px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

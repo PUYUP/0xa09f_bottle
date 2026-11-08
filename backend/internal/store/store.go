@@ -55,11 +55,15 @@ type Envelope struct {
 }
 
 type Bottle struct {
-	ID            string     `json:"id"`
-	CreatedAt     int64      `json:"createdAt"`
-	MaxDeliveries int        `json:"maxDeliveries"`
-	Depth         int        `json:"depth,omitempty"`
-	ParentID      string     `json:"parentId,omitempty"`
+	ID            string `json:"id"`
+	CreatedAt     int64  `json:"createdAt"`
+	MaxDeliveries int    `json:"maxDeliveries"`
+	Depth         int    `json:"depth,omitempty"`
+	ParentID      string `json:"parentId,omitempty"`
+	// RootID is the id of the thread's first message: empty on roots,
+	// propagated unchanged through every reply so clients can group a whole
+	// conversation without walking the parent chain.
+	RootID        string     `json:"rootId,omitempty"`
 	Deliveries    int        `json:"deliveries"`
 	Status        string     `json:"status"`
 	PayloadIV     string     `json:"payloadIv"`
