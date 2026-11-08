@@ -107,7 +107,7 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
                     onClaimed();
                   } else {
                     setNotice(
-                      "vault imported — your keys are restored. claim any name below; the server will return your original username."
+                      "vault imported — your keys are restored. pick a name below to finish setup."
                     );
                   }
                 } catch (ex) {

@@ -1370,6 +1370,28 @@ export async function exportVault() {
   log(`exported encrypted vault with ${payload.keys.length} pool key(s)`);
 }
 
+// Vault imports restore the identity JWK, but older vaults lack the local
+// username/userId fields. The public profile endpoint needs no auth, so
+// resolve the canonical profile straight from the server — same result as
+// re-claiming, without making the user pick a name first.
+async function restoreIdentityProfile() {
+  const id = await getIdentity().catch(() => null);
+  if (!id?.publicJwk || id.username) return;
+  const userId = await deriveUserId(id.publicJwk);
+  try {
+    const { user } = await api<{ user?: { id?: string; username?: string } }>(
+      `/api/users/${userId}`
+    );
+    if (user?.username) {
+      id.username = user.username;
+      id.userId = user.id || userId;
+      await idbPut(META_STORE, id).catch(() => {});
+    }
+  } catch {
+    // never registered server-side — the username gate handles the claim
+  }
+}
+
 export async function importVaultFile(file: File) {
   const passphrase = window.prompt("vault passphrase");
   if (!passphrase) return;
@@ -1460,6 +1482,7 @@ export async function importVaultFile(file: File) {
   }
   resetIdentityCache();
   await getIdentity().catch(() => null);
+  await restoreIdentityProfile();
   await loadKeys();
   await hydrateKeyMetadata();
   await renderInbox();
