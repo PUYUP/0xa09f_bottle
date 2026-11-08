@@ -168,7 +168,7 @@ export async function claimUsername(username: string): Promise<void> {
   const userId = await deriveUserId(id.publicJwk);
   const [serverPub, nonce] = await Promise.all([getServerPub(), fetchNonce(userId)]);
   const { ts, proof } = await computeProof(id.privateJwk, serverPub, userId, nonce);
-  await api("/api/users", {
+  const res = await api<{ user?: { username?: string } }>("/api/users", {
     method: "POST",
     body: JSON.stringify({
       username,
@@ -179,7 +179,17 @@ export async function claimUsername(username: string): Promise<void> {
       proof,
     }),
   });
-  id.username = username;
+  // The server is authoritative: re-claiming an existing identity returns
+  // the stored profile and ignores the requested username, so take the
+  // canonical name from the response (or /api/me as fallback).
+  let canonical = res?.user?.username || username;
+  try {
+    const { user } = await api<{ user?: { username?: string } }>("/api/me");
+    if (user?.username) canonical = user.username;
+  } catch {
+    // keep response value
+  }
+  id.username = canonical;
   id.userId = userId;
   await idbPut(META_STORE, id).catch(() => {});
   identityRecord = id;

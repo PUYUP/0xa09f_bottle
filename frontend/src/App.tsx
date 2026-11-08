@@ -14,9 +14,65 @@ import {
   openThread,
   readTTLSeconds,
 } from "./lib/store";
-import { getIdentity } from "./lib/identity";
+import { getIdentity, randomUsername as genName } from "./lib/identity";
+import { claimUsernameUI } from "./lib/store";
 import { TermsContent, PrivacyContent } from "./legal";
 import type { ThreadNode } from "./lib/store";
+
+// UsernameGate blocks the whole app until a username is claimed. A random
+// default is prefilled; the dice button regenerates it.
+function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
+  const [name, setName] = useState(() => genName());
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const claim = () => {
+    const v = name.trim();
+    if (!v || busy) return;
+    setBusy(true);
+    setErr("");
+    claimUsernameUI(v)
+      .then(onClaimed)
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center p-4">
+      <div className="bevel w-full">
+        <div className="retro-titlebar">
+          <span>👤 choose your name</span>
+          <span className="text-[13px]">required</span>
+        </div>
+        <div className="retro-body space-y-3">
+          <p className="text-[14px] text-neutral-700">
+            saltleak needs a username to identify you — for blocking, reporting
+            and your public profile. It is bound to this device's identity key
+            forever; pick carefully.
+          </p>
+          <div className="flex gap-2">
+            <input
+              className="retro-input flex-1"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && claim()}
+              autoFocus
+            />
+            <button
+              className="retro-btn"
+              title="random username"
+              onClick={() => setName(genName())}
+            >
+              ⚄
+            </button>
+          </div>
+          {err && <div className="text-[13px] text-red-700">{err}</div>}
+          <button className="retro-btn w-full" disabled={busy || !name.trim()} onClick={claim}>
+            {busy ? "claiming…" : "claim & enter"}
+          </button>
+        </div>
+      </div>
+    </main>
+  );
+}
 
 export default function App() {
   const state = useApp();
@@ -53,6 +109,16 @@ export default function App() {
 
   const ttlValid = readTTLSeconds(baitTtl);
   const isNewUser = state.keys.length === 0 && !identity?.username;
+
+  // Mandatory username: once the identity record exists, the app stays
+  // locked behind the claim screen until a username is set.
+  if (identity && !identity.username) {
+    return (
+      <UsernameGate
+        onClaimed={() => getIdentity().then(setIdentity).catch(() => {})}
+      />
+    );
+  }
 
   const openBaitDialog = () => setBaitDialog(true);
   const confirmBait = () => {

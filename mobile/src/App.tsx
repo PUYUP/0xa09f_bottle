@@ -8,6 +8,7 @@ import {
   IonButtons,
   IonButton,
   IonTextarea,
+  IonInput,
   IonList,
   IonItem,
   IonLabel,
@@ -36,8 +37,10 @@ import {
   openThread,
 } from "@shared/store";
 import type { ThreadNode } from "@shared/store";
-import type { ThreadRecord } from "@shared/types";
+import type { ThreadRecord, IdentityRecord } from "@shared/types";
 import { MAX_THREAD_DEPTH } from "@shared/crypto";
+import { getIdentity, randomUsername as genName } from "@shared/identity";
+import { claimUsernameUI } from "@shared/store";
 import { TermsContent, PrivacyContent } from "./legal";
 
 interface Row {
@@ -58,10 +61,16 @@ export default function App() {
   const [baitOpen, setBaitOpen] = useState(false);
   const [legal, setLegal] = useState<"terms" | "privacy" | null>(null);
   const [busy, setBusy] = useState(false);
+  const [identity, setIdentity] = useState<IdentityRecord | null>(null);
+  const [claimName, setClaimName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     init().catch((e) => log(`boot: ${(e as Error).message}`, "err"));
+    getIdentity().then((id) => {
+      setIdentity(id);
+      setClaimName((n) => n || genName());
+    }).catch(() => {});
     const iv = setInterval(() => {
       buildThreads()
         .then((t) => setThreads(t.roots))
@@ -125,6 +134,51 @@ export default function App() {
       await dropBottle(message, "86400");
       setMessage("");
     });
+
+  // Mandatory username gate — same policy as the web client.
+  if (identity && !identity.username) {
+    return (
+      <IonApp>
+        <IonContent className="ion-padding" style={{ display: "flex", alignItems: "center" }}>
+          <div style={{ width: "100%" }}>
+            <h2>choose your name</h2>
+            <p style={{ color: "var(--ion-color-medium)", fontSize: 14 }}>
+              saltleak needs a username — bound to this device's identity key
+              forever. A random one is prefilled; regenerate if you like.
+            </p>
+            <IonItem lines="none" className="ion-margin-top">
+              <IonInput
+                label="username"
+                value={claimName}
+                onIonInput={(e) => setClaimName(e.detail.value ?? "")}
+              />
+              <IonButton
+                slot="end"
+                fill="clear"
+                onClick={() => setClaimName(genName())}
+                title="random username"
+              >
+                ⚄
+              </IonButton>
+            </IonItem>
+            <IonButton
+              expand="block"
+              className="ion-margin-top"
+              disabled={busy || !claimName.trim()}
+              onClick={() =>
+                run(async () => {
+                  await claimUsernameUI(claimName.trim());
+                  setIdentity(await getIdentity());
+                })
+              }
+            >
+              claim &amp; enter
+            </IonButton>
+          </div>
+        </IonContent>
+      </IonApp>
+    );
+  }
 
   return (
     <IonApp>
