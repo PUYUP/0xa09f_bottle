@@ -7,15 +7,15 @@ import {
   SELF_PREFIX,
   decodePlaintext,
   decryptPayload,
-  decryptSyncState,
+  decryptSyncRecord,
   derivePickupProof,
   deriveReplyKeyPair,
   encodePlaintext,
-  encryptSyncState,
+  encryptSyncRecord,
   makeKeyRecord,
+  syncRecordKey,
   unwrapSessionKey,
   wrapSessionKey,
-  type SyncPayload,
 } from "./crypto";
 import { idbClear, idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
 import { claimUsername, computeProof, deriveUserId, fetchNonce, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
@@ -122,19 +122,27 @@ export async function loadKeys() {
   setState({ keys: keyRecords });
   await refreshActivePoolKeys();
   syncProfile().catch(() => {});
-  pullSyncState().catch(() => {});
+  pullSyncRecords().catch(() => {});
 }
 
-// ---------- encrypted sync state ----------
-// readAt/dismissedAt ride to other devices as an AES-GCM blob the server
-// cannot read. Pulled once per session after loadKeys; pushed (debounced)
-// whenever read/dismiss state changes.
+// ---------- encrypted per-record sync ----------
+// readAt/dismissedAt sync across devices as individual AES-GCM records.
+// Storage keys are salted SHA-256 hashes (server can't tell which fields
+// exist); blobs carry {fieldKey, ts} ciphertext the server can't read.
+// Pulled once per session after loadKeys; pushed (debounced) for dirty
+// fields whenever read/dismiss state changes.
 
-// syncReadAt caches remote read timestamps by meta record id so bottles
-// fetched AFTER the pull still land with their read state applied.
+// syncReadAt caches read timestamps by meta record id so bottles fetched
+// AFTER the pull still land with their read state applied.
 const syncReadAt = new Map<string, number>();
+const syncDirty = new Set<string>(); // fieldKeys: "<recordId>" reads, "bait:<kid>" dismissals
 let syncPulled = false;
 let syncPushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function markSyncDirty(fieldKey: string) {
+  syncDirty.add(fieldKey);
+  scheduleSyncPush();
+}
 
 async function syncAuthFields() {
   const id = await getIdentity();
@@ -150,81 +158,89 @@ async function syncAuthFields() {
   };
 }
 
-async function buildSyncPayload(): Promise<SyncPayload> {
-  const readAt: Record<string, number> = {};
-  const meta = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
-  for (const r of meta) {
-    if (r?.readAt) readAt[r.id] = r.readAt;
-  }
-  const dismissed: Record<string, number> = {};
-  for (const k of state.keys) {
-    if (k.dismissedAt) dismissed[k.kid] = k.dismissedAt;
-  }
-  return { v: 1, readAt, dismissed };
+interface SyncRemoteRecord {
+  key: string;
+  blob: string;
 }
 
-async function applySyncPayload(payload: SyncPayload) {
-  const meta = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
-  for (const r of meta) {
-    const remote = payload.readAt?.[r.id];
-    if (remote && remote > (r.readAt || 0)) {
-      r.readAt = remote;
-      r.repliesSeenAt = Math.max(r.repliesSeenAt || 0, remote);
-      await idbPut(META_STORE, r).catch(() => {});
-    }
-  }
-  let keysDirty = false;
-  const nextKeys = state.keys.map((k) => {
-    const remote = payload.dismissed?.[k.kid];
-    if (remote && remote > (k.dismissedAt || 0)) {
-      keysDirty = true;
-      return { ...k, dismissedAt: remote };
-    }
-    return k;
-  });
-  if (keysDirty) {
-    setState({ keys: nextKeys });
-    await Promise.all(
-      nextKeys.filter((k) => payload.dismissed?.[k.kid]).map((k) => idbPut(KEY_STORE, k))
-    );
-  }
-  for (const [id, ts] of Object.entries(payload.readAt || {})) {
-    syncReadAt.set(id, Math.max(syncReadAt.get(id) || 0, ts));
-  }
-  await renderInbox();
-}
-
-async function pullSyncState() {
+async function pullSyncRecords() {
   if (syncPulled) return;
   syncPulled = true;
   const auth = await syncAuthFields();
-  const res = await api<{ blob?: string }>("/api/sync/state", {
+  const res = await api<{ records?: SyncRemoteRecord[] }>("/api/sync/records", {
     method: "POST",
     body: JSON.stringify(auth),
   });
-  if (!res?.blob) return;
+  const records = res?.records || [];
+  if (!records.length) return;
   const id = await getIdentity();
-  const payload = await decryptSyncState(res.blob, id.privateJwk);
-  if (payload) await applySyncPayload(payload);
+  const meta = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
+  const byId = new Map(meta.map((r) => [r.id, r]));
+  let keysDirty = false;
+  for (const rec of records) {
+    const plain = await decryptSyncRecord(id.privateJwk, rec.blob);
+    if (!plain) continue;
+    if (plain.k.startsWith("bait:")) {
+      const kid = plain.k.slice(5);
+      const k = state.keys.find((k) => k.kid === kid);
+      if (k && plain.t > (k.dismissedAt || 0)) {
+        k.dismissedAt = plain.t;
+        keysDirty = true;
+        await idbPut(KEY_STORE, k).catch(() => {});
+      }
+      continue;
+    }
+    // read receipt: field key is the meta record id ("caught:x"/"sent:x")
+    syncReadAt.set(plain.k, Math.max(syncReadAt.get(plain.k) || 0, plain.t));
+    const local = byId.get(plain.k);
+    if (local && plain.t > (local.readAt || 0)) {
+      local.readAt = plain.t;
+      local.repliesSeenAt = Math.max(local.repliesSeenAt || 0, plain.t);
+      await idbPut(META_STORE, local).catch(() => {});
+    }
+  }
+  if (keysDirty) setState({ keys: [...state.keys] });
+  await renderInbox();
 }
 
-async function pushSyncState() {
+async function pushSyncRecords() {
   const id = await getIdentity().catch(() => null);
-  if (!id?.privateJwk) return;
-  const payload = await buildSyncPayload();
-  const blob = await encryptSyncState(payload, id.privateJwk);
+  if (!id?.privateJwk || !syncDirty.size) return;
+  const userId = await deriveUserId(id.publicJwk);
+  const fields = [...syncDirty];
+  syncDirty.clear();
+  const records: { key: string; blob: string }[] = [];
+  for (const fieldKey of fields) {
+    let ts = 0;
+    if (fieldKey.startsWith("bait:")) {
+      ts = state.keys.find((k) => k.kid === fieldKey.slice(5))?.dismissedAt || 0;
+    } else {
+      const rec = await idbGet<ThreadRecord>(META_STORE, fieldKey).catch(() => null);
+      ts = rec?.readAt || 0;
+    }
+    if (!ts) continue;
+    const [key, blob] = await Promise.all([
+      syncRecordKey(userId, fieldKey),
+      encryptSyncRecord(id.privateJwk, fieldKey, ts),
+    ]);
+    records.push({ key, blob });
+  }
+  if (!records.length) return;
   const auth = await syncAuthFields();
-  await api("/api/sync/state", {
-    method: "POST",
-    body: JSON.stringify({ ...auth, blob }),
-  });
+  // chunk to stay well under request limits
+  for (let i = 0; i < records.length; i += 200) {
+    await api("/api/sync/records", {
+      method: "POST",
+      body: JSON.stringify({ ...auth, records: records.slice(i, i + 200) }),
+    });
+  }
 }
 
 function scheduleSyncPush() {
   if (syncPushTimer) return;
   syncPushTimer = setTimeout(() => {
     syncPushTimer = null;
-    pushSyncState().catch(() => {});
+    pushSyncRecords().catch(() => {});
   }, 2000);
 }
 
@@ -591,7 +607,7 @@ export async function dismissEatenBait(kid: string) {
     setState({ keys: [...state.keys] });
   }
   await renderInbox();
-  scheduleSyncPush();
+  markSyncDirty(`bait:${kid}`);
 }
 
 export async function reportBottle(bottleId: string) {
@@ -912,11 +928,11 @@ export async function openThread(bottleId: string) {
         rec.repliesSeenAt = seen;
         rec.readAt = seen;
         await idbPut(META_STORE, rec).catch(() => {});
+        markSyncDirty(rec.id);
       }
     }
   }
   await renderInbox();
-  scheduleSyncPush();
 }
 
 export async function checkBottles() {
@@ -1198,6 +1214,7 @@ export async function importVaultFile(file: File) {
   profileSynced = false;
   syncPulled = false;
   syncReadAt.clear();
+  syncDirty.clear();
   let restored = 0;
 
   if (payload.version === 4) {

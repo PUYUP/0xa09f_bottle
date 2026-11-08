@@ -110,6 +110,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Delete("/api/users/:id/block", userLimiter, s.unblockUser)
 	app.Get("/api/me/blocks", s.listBlocks)
 	app.Post("/api/sync/state", userLimiter, s.syncState)
+	app.Post("/api/sync/records", userLimiter, s.syncRecords)
 	app.Post("/api/users/:id/report", userLimiter, s.reportUser)
 
 	app.Use(s.serveStatic)

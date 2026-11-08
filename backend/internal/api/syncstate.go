@@ -82,3 +82,66 @@ func (s *Server) syncState(c fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{"ok": true})
 }
+
+type syncRecordEntry struct {
+	Key  string `json:"key"`
+	Blob string `json:"blob"`
+}
+
+type syncRecordsRequest struct {
+	PublicKey string            `json:"publicKey"`
+	UserID    string            `json:"userId"`
+	Ts        int64             `json:"ts"`
+	Nonce     string            `json:"nonce"`
+	Proof     string            `json:"proof"`
+	Records   []syncRecordEntry `json:"records,omitempty"`
+}
+
+// syncRecords is the per-record variant of syncState: clients push deltas
+// of encrypted fields and pull the full set once per session. record_key is
+// a client-computed salted hash and blob is ciphertext — the server learns
+// only how many fields exist and when they were last written.
+func (s *Server) syncRecords(c fiber.Ctx) error {
+	var req syncRecordsRequest
+	if err := bindJSON(c, &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+	}
+	auth := syncStateRequest{
+		PublicKey: req.PublicKey,
+		UserID:    req.UserID,
+		Ts:        req.Ts,
+		Nonce:     req.Nonce,
+		Proof:     req.Proof,
+	}
+	userID, err := s.verifySyncAuth(c, &auth)
+	if err != nil {
+		return err
+	}
+	if len(req.Records) == 0 {
+		recs, err := s.pg.ListSyncRecords(c.Context(), userID, 0)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "lookup failed")
+		}
+		out := make([]syncRecordEntry, 0, len(recs))
+		for _, r := range recs {
+			out = append(out, syncRecordEntry{Key: r.Key, Blob: r.Blob})
+		}
+		return c.JSON(fiber.Map{"records": out})
+	}
+	if len(req.Records) > 500 {
+		return fiber.NewError(fiber.StatusBadRequest, "too many records")
+	}
+	keys := make([]string, 0, len(req.Records))
+	blobs := make([]string, 0, len(req.Records))
+	for _, r := range req.Records {
+		if len(r.Key) != 64 || len(r.Blob) == 0 || len(r.Blob) > 4096 {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid record")
+		}
+		keys = append(keys, r.Key)
+		blobs = append(blobs, r.Blob)
+	}
+	if err := s.pg.UpsertSyncRecords(c.Context(), userID, keys, blobs); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "save failed")
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}

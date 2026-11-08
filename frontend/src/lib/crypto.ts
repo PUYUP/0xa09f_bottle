@@ -215,16 +215,11 @@ export async function unwrapSessionKey(
 }
 
 // ---------- encrypted sync state ----------
-// readAt/dismissedAt sync across devices as an opaque AES-GCM blob keyed by
-// the identity private key. The server stores ciphertext it cannot read.
+// readAt/dismissedAt sync across devices as per-record AES-GCM blobs keyed
+// by the identity private key. The server stores ciphertext it cannot read;
+// record keys are salted hashes so it cannot tell which fields exist either.
 
 const SYNC_INFO = "a09f-sync-v1";
-
-export interface SyncPayload {
-  v: number;
-  readAt: Record<string, number>; // meta record id -> unix ms
-  dismissed: Record<string, number>; // bait kid -> unix ms
-}
 
 async function deriveSyncKey(identityPrivateJwk: JWK): Promise<CryptoKey> {
   const dBytes = b64urlToBytes(identityPrivateJwk.d || "");
@@ -238,32 +233,64 @@ async function deriveSyncKey(identityPrivateJwk: JWK): Promise<CryptoKey> {
   );
 }
 
-export async function encryptSyncState(payload: SyncPayload, identityPrivateJwk: JWK): Promise<string> {
-  const key = await deriveSyncKey(identityPrivateJwk);
+async function packSyncBlob(key: CryptoKey, plaintext: string): Promise<string> {
   const iv = randBytes(12);
-  const ct = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv },
-    key,
-    textBytes(JSON.stringify(payload))
-  );
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, textBytes(plaintext));
   const raw = new Uint8Array(iv.length + ct.byteLength);
   raw.set(iv, 0);
   raw.set(new Uint8Array(ct), iv.length);
   return bytesToB64(raw);
 }
 
-export async function decryptSyncState(blob: string, identityPrivateJwk: JWK): Promise<SyncPayload | null> {
+async function unpackSyncBlob(key: CryptoKey, blob: string): Promise<string | null> {
   try {
-    const key = await deriveSyncKey(identityPrivateJwk);
     const raw = b64ToBytes(blob);
     const pt = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: raw.slice(0, 12) },
       key,
       raw.slice(12)
     );
-    const obj = JSON.parse(new TextDecoder().decode(pt)) as SyncPayload;
-    if (obj?.v !== 1) return null;
-    return obj;
+    return new TextDecoder().decode(pt);
+  } catch {
+    return null;
+  }
+}
+
+export interface SyncRecordPlain {
+  k: string; // field key: "<metaRecordId>" for reads, "bait:<kid>" for dismissals
+  t: number; // unix ms
+}
+
+// syncRecordKey hashes (userId, fieldKey) into the opaque storage key —
+// deterministic so the server can upsert/dedupe without learning the field.
+export async function syncRecordKey(userId: string, fieldKey: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    textBytes(`a09f-syncrec-v1:${userId}:${fieldKey}`)
+  );
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function encryptSyncRecord(
+  identityPrivateJwk: JWK,
+  fieldKey: string,
+  ts: number
+): Promise<string> {
+  const key = await deriveSyncKey(identityPrivateJwk);
+  return packSyncBlob(key, JSON.stringify({ v: 1, k: fieldKey, t: ts }));
+}
+
+export async function decryptSyncRecord(
+  identityPrivateJwk: JWK,
+  blob: string
+): Promise<SyncRecordPlain | null> {
+  const key = await deriveSyncKey(identityPrivateJwk);
+  const pt = await unpackSyncBlob(key, blob);
+  if (!pt) return null;
+  try {
+    const obj = JSON.parse(pt) as SyncRecordPlain & { v?: number };
+    if (obj?.v !== 1 || typeof obj.k !== "string" || typeof obj.t !== "number") return null;
+    return { k: obj.k, t: obj.t };
   } catch {
     return null;
   }

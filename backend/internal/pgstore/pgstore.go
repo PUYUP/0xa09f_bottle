@@ -123,6 +123,20 @@ CREATE TABLE IF NOT EXISTS user_sync_state (
   blob        TEXT NOT NULL,
   updated_at  BIGINT NOT NULL
 );
+
+-- user_sync_records is the per-record variant: one row per synced field
+-- (read:<recordId>, dismiss:<kid>) so clients can push deltas instead of
+-- rewriting a monolithic blob. record_key and blob are both opaque to the
+-- server — keys reference identifiers it already knows, values are
+-- client-side ciphertext.
+CREATE TABLE IF NOT EXISTS user_sync_records (
+  user_id    TEXT NOT NULL,
+  record_key TEXT NOT NULL,
+  blob       TEXT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  PRIMARY KEY (user_id, record_key)
+);
+CREATE INDEX IF NOT EXISTS user_sync_records_user_idx ON user_sync_records (user_id, updated_at);
 `
 
 type PGStore struct {
@@ -440,6 +454,51 @@ VALUES ($1, $2, $3)
 ON CONFLICT (user_id) DO UPDATE SET blob = EXCLUDED.blob, updated_at = EXCLUDED.updated_at`,
 		userID, blob, time.Now().Unix())
 	return err
+}
+
+// SyncRecord is one encrypted per-field sync entry.
+type SyncRecord struct {
+	Key       string
+	Blob      string
+	UpdatedAt int64
+}
+
+// UpsertSyncRecords batch-writes encrypted sync entries for a user.
+func (p *PGStore) UpsertSyncRecords(ctx context.Context, userID string, keys, blobs []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	now := time.Now().Unix()
+	_, err := p.pool.Exec(ctx, `
+INSERT INTO user_sync_records (user_id, record_key, blob, updated_at)
+SELECT $1, k.key, k.blob, $4
+FROM unnest($2::text[], $3::text[]) AS k(key, blob)
+ON CONFLICT (user_id, record_key) DO UPDATE SET
+  blob = EXCLUDED.blob, updated_at = EXCLUDED.updated_at`,
+		userID, keys, blobs, now)
+	return err
+}
+
+// ListSyncRecords returns a user's sync entries, optionally only those
+// updated after `since` (unix seconds; 0 = all).
+func (p *PGStore) ListSyncRecords(ctx context.Context, userID string, since int64) ([]SyncRecord, error) {
+	rows, err := p.pool.Query(ctx, `
+SELECT record_key, blob, updated_at FROM user_sync_records
+WHERE user_id = $1 AND updated_at > $2
+ORDER BY updated_at ASC`, userID, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SyncRecord{}
+	for rows.Next() {
+		var r SyncRecord
+		if err := rows.Scan(&r.Key, &r.Blob, &r.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 func (p *PGStore) UpdateDelivery(ctx context.Context, id string, deliveries int, status string, deliveredKids []string) error {
