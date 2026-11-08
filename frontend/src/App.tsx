@@ -215,14 +215,14 @@ export default function App() {
             {detailNode && (
               <span className="retro-link" onClick={() => setDetailPath([])}>← back to catch</span>
             )}
+            {!detailNode && "only you can read these"}
             <span
               className="retro-link"
               title="check for new catches"
               onClick={() => run(checkBottles)}
             >
-              🔄
+              🔄 refresh
             </span>
-            {!detailNode && "only you can read these"}
           </span>
         </div>
         <div className="retro-body">
