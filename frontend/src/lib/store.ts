@@ -818,6 +818,8 @@ export interface UserStats {
   memberSince: number;
   casts: number;
   replies: number;
+  castsDelivered: number;
+  castsExhausted: number;
   received: number;
   claims: number;
   keysDeposited: number;

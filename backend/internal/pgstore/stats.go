@@ -7,17 +7,19 @@ import "context"
 // counted via the self:<userId> envelope marker, receives via delivered_kids
 // intersected with the user's deposited pool kids.
 type UserStats struct {
-	MemberSince   int64 `json:"memberSince"`
-	Casts         int64 `json:"casts"`
-	Replies       int64 `json:"replies"`
-	Received      int64 `json:"received"`
-	Claims        int64 `json:"claims"`
-	KeysDeposited int64 `json:"keysDeposited"`
-	FirstActivity int64 `json:"firstActivity"`
-	LastActivity  int64 `json:"lastActivity"`
-	ReportsFiled  int64 `json:"reportsFiled"`
-	TimesReported int64 `json:"timesReported"`
-	UsersBlocked  int64 `json:"usersBlocked"`
+	MemberSince    int64 `json:"memberSince"`
+	Casts          int64 `json:"casts"`
+	Replies        int64 `json:"replies"`
+	CastsDelivered int64 `json:"castsDelivered"`
+	CastsExhausted int64 `json:"castsExhausted"`
+	Received       int64 `json:"received"`
+	Claims         int64 `json:"claims"`
+	KeysDeposited  int64 `json:"keysDeposited"`
+	FirstActivity  int64 `json:"firstActivity"`
+	LastActivity   int64 `json:"lastActivity"`
+	ReportsFiled   int64 `json:"reportsFiled"`
+	TimesReported  int64 `json:"timesReported"`
+	UsersBlocked   int64 `json:"usersBlocked"`
 }
 
 func (p *PGStore) UserStats(ctx context.Context, userID string) (UserStats, error) {
@@ -30,13 +32,15 @@ func (p *PGStore) UserStats(ctx context.Context, userID string) (UserStats, erro
 		SELECT
 		  count(*) FILTER (WHERE depth = 1),
 		  count(*) FILTER (WHERE depth > 1),
+		  count(*) FILTER (WHERE deliveries > 0),
+		  count(*) FILTER (WHERE status = 'EXHAUSTED'),
 		  COALESCE(min(created_at), 0),
 		  COALESCE(max(created_at), 0)
 		FROM bottles
 		WHERE EXISTS (
 		  SELECT 1 FROM jsonb_array_elements(envelopes) e
 		  WHERE e->>'kid' = $1
-		)`, selfKid).Scan(&st.Casts, &st.Replies, &st.FirstActivity, &st.LastActivity)
+		)`, selfKid).Scan(&st.Casts, &st.Replies, &st.CastsDelivered, &st.CastsExhausted, &st.FirstActivity, &st.LastActivity)
 	if err != nil {
 		return st, err
 	}

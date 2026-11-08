@@ -206,6 +206,16 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
               <tbody>
                 <tr><td className="pr-3">casts</td><td><b>{stats.casts}</b></td></tr>
                 <tr><td className="pr-3">replies</td><td><b>{stats.replies}</b></td></tr>
+                <tr>
+                  <td className="pr-3">picked up by someone</td>
+                  <td>
+                    <b>{stats.castsDelivered}</b>
+                    {stats.casts + stats.replies > 0 && (
+                      <span className="text-neutral-600"> ({Math.round((stats.castsDelivered / (stats.casts + stats.replies)) * 100)}%)</span>
+                    )}
+                  </td>
+                </tr>
+                <tr><td className="pr-3">fully delivered</td><td><b>{stats.castsExhausted}</b></td></tr>
                 <tr><td className="pr-3">bottles received</td><td><b>{stats.received}</b></td></tr>
                 <tr><td className="pr-3">delivery claims</td><td><b>{stats.claims}</b></td></tr>
                 <tr><td className="pr-3">keys deposited</td><td><b>{stats.keysDeposited}</b></td></tr>
