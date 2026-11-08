@@ -32,7 +32,7 @@ or with Docker:
 
 ```sh
 docker build --build-arg VITE_API_URL=https://api.example.com -t a09f-web .
-docker run -p 80:80 saltleak-web
+docker run -p 80:80 a09f-web
 ```
 
 The backend must allow the frontend origin via CORS (already `*` by default;
