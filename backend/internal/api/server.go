@@ -100,6 +100,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Get("/api/events", s.streamEvents)
 	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
 	app.Post("/api/bottles/:id/report", bottleLimiter, s.reportBottle)
+	app.Delete("/api/bottles/:id", userLimiter, s.deleteBottle)
 	app.Get("/api/auth/server-key", s.serverKey)
 	app.Post("/api/auth/nonce", nonceLimiter, s.issueNonce)
 	app.Post("/api/auth/pop-token", nonceLimiter, s.popToken)

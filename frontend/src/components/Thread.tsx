@@ -1,6 +1,6 @@
 import type { ThreadNode } from "../lib/store";
 import { MAX_THREAD_DEPTH } from "../lib/crypto";
-import { replyBottle, reportBottle } from "../lib/store";
+import { deleteBottle, replyBottle, reportBottle } from "../lib/store";
 import { useApp } from "../hooks/useApp";
 
 function MessageNode({
@@ -45,6 +45,17 @@ function MessageNode({
       </div>
       <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{plain!.text}</p>
       <div className="mt-1 text-[13px]">
+        {isSent && (
+          <span
+            className="retro-link text-red-800"
+            onClick={(e) => {
+              e.stopPropagation();
+              deleteBottle(bottle!.id).catch((err) => console.error(err));
+            }}
+          >
+            [🗑 delete]
+          </span>
+        )}
         {!isSent && (
           <span
             className="retro-link text-red-800"

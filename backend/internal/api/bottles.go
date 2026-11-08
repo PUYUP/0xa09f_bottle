@@ -542,6 +542,51 @@ func (s *Server) threadBlocked(ctx context.Context, userID, parentID string) (bo
 	return iBlocked || theyBlocked, nil
 }
 
+// deleteBottle lets the author remove their own message (UGC "delete
+// content"): the bottle is crypto-shredded into a DELETED tombstone in
+// Postgres and removed from Redis, then delete events go to the same
+// kid-matched subscribers so online clients drop their local copies.
+// Only the sender may delete — authorship is proven by the self:<userId>
+// envelope marker every bottle carries.
+func (s *Server) deleteBottle(c fiber.Ctx) error {
+	user, err := s.requireAuth(c)
+	if err != nil {
+		return err
+	}
+	id := c.Params("id")
+	bottle, err := s.store.GetBottle(c.Context(), id)
+	if err != nil && s.pg != nil {
+		bottle, err = s.pg.GetBottle(c.Context(), id)
+	}
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "bottle not found")
+	}
+	if bottle.Status == "DELETED" {
+		return c.JSON(fiber.Map{"ok": true, "alreadyDeleted": true})
+	}
+	selfKid := "self:" + user.ID
+	author := false
+	for _, env := range bottle.Envelopes {
+		if env.KID == selfKid {
+			author = true
+			break
+		}
+	}
+	if !author {
+		return fiber.NewError(fiber.StatusForbidden, "only the author can delete a bottle")
+	}
+	s.events.publishDeleted(bottle)
+	if s.pg != nil {
+		if _, err := s.pg.TombstoneBottle(c.Context(), id); err != nil {
+			log.Printf("pg tombstone %s: %v", id, err)
+		}
+	}
+	if err := s.store.DeleteBottle(c.Context(), id); err != nil {
+		log.Printf("redis delete %s: %v", id, err)
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
 type reportBottleRequest struct {
 	Reason string `json:"reason"`
 }

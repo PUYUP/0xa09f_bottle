@@ -7,6 +7,7 @@ import { BOTTLE_QUOTA, MAX_LOCAL_KEYS } from "./lib/crypto";
 import {
   buildThreads,
   checkBottles,
+  deleteBottle,
   dropBottle,
   formatTTL,
   generateAndDeposit,
@@ -409,6 +410,17 @@ export default function App() {
                   {hasNewReplies && (
                     <span className="ml-1 rounded-sm bg-red-600 px-1 font-bold text-white">
                       ● new
+                    </span>
+                  )}
+                  {isSent && bottleId && (
+                    <span
+                      className="retro-link ml-2 text-red-800"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteBottle(bottleId).catch(() => {});
+                      }}
+                    >
+                      [🗑]
                     </span>
                   )}
                 </div>

@@ -1052,6 +1052,24 @@ func (s *Store) GetBottle(ctx context.Context, id string) (Bottle, error) {
 	return bottle, nil
 }
 
+// DeleteBottle removes a bottle from the active Redis set entirely —
+// key, active index, and parent children index. Postgres keeps a tombstone
+// row so listings can still propagate the deletion.
+func (s *Store) DeleteBottle(ctx context.Context, id string) error {
+	b, err := s.GetBottle(ctx, id)
+	if err != nil {
+		return err
+	}
+	pipe := s.rdb.Pipeline()
+	pipe.Del(ctx, bottleRedisKey(id))
+	pipe.ZRem(ctx, activeKey, id)
+	if b.ParentID != "" {
+		pipe.SRem(ctx, childrenRedisKey(b.ParentID), id)
+	}
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
 func (s *Store) Pickup(ctx context.Context, id, kid, tokenHash string) (PickupResult, error) {
 	out, err := pickupScript.Run(ctx, s.rdb, []string{bottleRedisKey(id), activeKey}, kid, id, tokenHash).Text()
 	if err != nil {

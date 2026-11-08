@@ -46,11 +46,21 @@ func (h *eventHub) unsubscribe(sub *eventSub) {
 // envelope kids. Delivery is best-effort: a slow client simply misses
 // events and catches up on the next manual/periodic scan.
 func (h *eventHub) publish(bottle store.Bottle) {
+	h.publishFlagged(bottle, false)
+}
+
+// publishDeleted notifies the same kid-matched subscribers that a bottle
+// was tombstoned, so clients can drop their local copy immediately.
+func (h *eventHub) publishDeleted(bottle store.Bottle) {
+	h.publishFlagged(bottle, true)
+}
+
+func (h *eventHub) publishFlagged(bottle store.Bottle, deleted bool) {
 	bottleKids := make(map[string]struct{}, len(bottle.Envelopes))
 	for _, env := range bottle.Envelopes {
 		bottleKids[env.KID] = struct{}{}
 	}
-	payload, _ := json.Marshal(map[string]string{"id": bottle.ID})
+	payload, _ := json.Marshal(map[string]any{"id": bottle.ID, "deleted": deleted})
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for sub := range h.subs {

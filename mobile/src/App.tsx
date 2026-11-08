@@ -19,7 +19,7 @@ import {
   IonModal,
   IonFooter,
 } from "@ionic/react";
-import { send, refresh, fish, cloudUpload, cloudDownload, chatbox } from "ionicons/icons";
+import { send, refresh, fish, cloudUpload, cloudDownload, chatbox, trash } from "ionicons/icons";
 import { getState, subscribe } from "@shared/store";
 import {
   init,
@@ -29,6 +29,7 @@ import {
   buildThreads,
   replyBottle,
   reportBottle,
+  deleteBottle,
   exportVault,
   importVaultFile,
   readTTLSeconds,
@@ -327,6 +328,23 @@ export default function App() {
                           }
                         >
                           report
+                        </IonButton>
+                      </div>
+                    )}
+                    {isSent && bottle && (
+                      <div style={{ marginTop: 4 }}>
+                        <IonButton
+                          size="small"
+                          fill="clear"
+                          color="danger"
+                          onClick={() =>
+                            deleteBottle(bottle.id).catch((e: Error) =>
+                              log(`delete: ${e.message}`, "err")
+                            )
+                          }
+                        >
+                          <IonIcon icon={trash} slot="start" />
+                          delete
                         </IonButton>
                       </div>
                     )}

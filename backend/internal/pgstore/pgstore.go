@@ -649,6 +649,57 @@ LIMIT $2`, parentID, limit)
 	return bottles, rows.Err()
 }
 
+// TombstoneBottle crypto-shreds a bottle in place: ciphertext, envelopes,
+// payload IV and delivered kids are wiped while the row (id, timestamps,
+// parent/root links, status='DELETED') survives so kid-filtered listings
+// can still propagate the deletion to clients. Thread counters on the
+// thread-key row are decremented and last-activity recomputed excluding
+// deleted children. Idempotent — tombstoning twice is a no-op.
+func (p *PGStore) TombstoneBottle(ctx context.Context, id string) (bool, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	var parentID, rootID, status string
+	err = tx.QueryRow(ctx,
+		`SELECT parent_id, root_id, status FROM bottles WHERE id = $1 FOR UPDATE`, id,
+	).Scan(&parentID, &rootID, &status)
+	if err == pgx.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if status == "DELETED" {
+		return true, tx.Commit(ctx)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE bottles SET status = 'DELETED', ciphertext = '', envelopes = '[]'::jsonb,
+  payload_iv = '', delivered_kids = '[]'::jsonb
+WHERE id = $1`, id); err != nil {
+		return false, err
+	}
+	if parentID != "" {
+		tk := rootID
+		if tk == "" {
+			tk = parentID
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE bottles t SET
+  thread_replies = GREATEST(0, t.thread_replies - 1),
+  thread_last_at = COALESCE((
+    SELECT MAX(c.created_at) FROM bottles c
+    WHERE c.parent_id <> '' AND c.status <> 'DELETED'
+      AND COALESCE(NULLIF(c.root_id, ''), c.parent_id) = t.id
+  ), 0)
+WHERE t.id = $1`, tk); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit(ctx)
+}
+
 // GetBottle returns one archived bottle by id (envelopes included), used to
 // resolve thread parents that have already expired from Redis.
 func (p *PGStore) GetBottle(ctx context.Context, id string) (store.Bottle, error) {

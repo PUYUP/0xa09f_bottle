@@ -631,6 +631,23 @@ export async function dismissEatenBait(kid: string) {
   markSyncDirty(`bait:${kid}`);
 }
 
+// deleteBottle removes the author's own message server-side (crypto-shredded
+// tombstone) and drops the local records. Only bottles we sent can be
+// deleted — authorship is enforced server-side via the self:<uid> marker.
+export async function deleteBottle(bottleId: string) {
+  if (!window.confirm("delete this message for everyone?")) return;
+  try {
+    await api(`/api/bottles/${encodeURIComponent(bottleId)}`, { method: "DELETE" });
+  } catch (e) {
+    log(`delete failed: ${(e as Error).message}`, "warn");
+    return;
+  }
+  await idbDelete(META_STORE, `sent:${bottleId}`).catch(() => {});
+  await idbDelete(META_STORE, `caught:${bottleId}`).catch(() => {});
+  await renderInbox();
+  log(`deleted bottle ${bottleId.slice(0, 8)}`);
+}
+
 export async function reportBottle(bottleId: string) {
   const reason = window.prompt("report reason (optional)") || "";
   await api(`/api/bottles/${encodeURIComponent(bottleId)}/report`, {
@@ -774,6 +791,7 @@ async function loadPopVerified(): Promise<Set<string>> {
 // (childCount/lastChildAt) onto local records so the inbox can badge and
 // sort threads by reply activity without fetching children eagerly.
 async function applyBottleStats(bottle: Bottle) {
+  if (bottle.status === "DELETED") return;
   const hasChild = bottle.lastChildAt || bottle.childCount;
   const hasThread = bottle.threadLastAt || bottle.threadCount;
   if (!hasChild && !hasThread) return;
@@ -825,6 +843,13 @@ async function applyBottleStats(bottle: Bottle) {
 // record. Returns true when a new record was written this session.
 async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Promise<boolean> {
   if (caughtThisSession.has(bottle.id)) return false;
+  // Tombstoned bottles propagate through listings so clients drop local
+  // copies even if they missed the SSE delete event.
+  if (bottle.status === "DELETED") {
+    await idbDelete(META_STORE, `caught:${bottle.id}`).catch(() => {});
+    await idbDelete(META_STORE, `sent:${bottle.id}`).catch(() => {});
+    return false;
+  }
   // Already decrypted locally? Skip the ECDH unwrap + AES-GCM decrypt +
   // claim round-trip — the overlap window re-scans recent bottles every
   // session and this is the dominant per-bottle cost. Records whose claim
@@ -1135,7 +1160,25 @@ export async function connectEvents() {
   eventsUrl = url;
   try {
     eventsSource = new EventSource(url);
-    eventsSource.addEventListener("bottle", scheduleCatchScan);
+    eventsSource.addEventListener("bottle", (ev) => {
+      // Payload is {"id":..., "deleted":bool}; deletions remove local
+      // records directly instead of waiting for a scan that may never
+      // surface the tombstone incrementally.
+      try {
+        const data = JSON.parse((ev as MessageEvent).data || "{}") as { id?: string; deleted?: boolean };
+        if (data.deleted && data.id) {
+          void (async () => {
+            await idbDelete(META_STORE, `caught:${data.id}`).catch(() => {});
+            await idbDelete(META_STORE, `sent:${data.id}`).catch(() => {});
+            await renderInbox();
+          })();
+          return;
+        }
+      } catch {
+        // fall through to scan
+      }
+      scheduleCatchScan();
+    });
   } catch {
     eventsSource = null;
   }
