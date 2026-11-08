@@ -509,7 +509,7 @@ func (p *PGStore) ListBottlesByKids(ctx context.Context, kids []string, limit in
 		return []store.Bottle{}, nil
 	}
 	rows, err := p.pool.Query(ctx, `
-SELECT DISTINCT b.id, b.created_at, b.depth, b.parent_id, b.root_id, b.max_deliveries, b.deliveries, b.status, b.payload_iv, b.ciphertext, b.envelopes, b.delivered_kids
+SELECT DISTINCT b.id COLLATE "C" AS id, b.created_at, b.depth, b.parent_id, b.root_id, b.max_deliveries, b.deliveries, b.status, b.payload_iv, b.ciphertext, b.envelopes, b.delivered_kids
 FROM bottles b
 JOIN bottle_kids k ON k.bottle_id = b.id
 WHERE k.kid = ANY($1::text[])
