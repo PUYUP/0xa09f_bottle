@@ -63,11 +63,12 @@ export function HowItWorksContent() {
     <>
       <h2>How a09f works</h2>
       <p>
-        a09f is a messaging service shaped like a game of chance: you throw
-        messages into a shared ocean, and strangers may pick them up. The twist
-        is that every message is locked with a padlock that only the intended
-        reader owns — the service itself is just the courier and never holds
-        the key.
+        a09f is a messaging service shaped like fishing: before you can receive
+        anything, you throw bait — a public key — into a shared ocean and wait
+        for a bite. You can also cast encrypted messages into the same water,
+        hoping a stranger's bait hooks them. The twist is that every message is
+        locked with a padlock that only the intended reader owns — the service
+        itself is just the courier and never holds the key.
       </p>
 
       <h3>The one big idea</h3>
