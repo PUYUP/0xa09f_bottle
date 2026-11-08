@@ -15,6 +15,8 @@ import {
   IonAlert,
   IonSpinner,
   IonIcon,
+  IonModal,
+  IonFooter,
 } from "@ionic/react";
 import { send, refresh, fish, cloudUpload, cloudDownload, chatbox } from "ionicons/icons";
 import { getState, subscribe } from "@shared/store";
@@ -34,6 +36,7 @@ import {
 import type { ThreadNode } from "@shared/store";
 import type { ThreadRecord } from "@shared/types";
 import { MAX_THREAD_DEPTH } from "@shared/crypto";
+import { TermsContent, PrivacyContent } from "./legal";
 
 interface Row {
   node: ThreadNode;
@@ -51,6 +54,7 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [replyTarget, setReplyTarget] = useState<ThreadRecord | null>(null);
   const [baitOpen, setBaitOpen] = useState(false);
+  const [legal, setLegal] = useState<"terms" | "privacy" | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -292,6 +296,38 @@ export default function App() {
           },
         ]}
       />
+
+      {/* terms & privacy */}
+      <IonModal isOpen={legal !== null} onDidDismiss={() => setLegal(null)}>
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>{legal === "terms" ? "terms of service" : "privacy policy"}</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={() => setLegal(null)}>close</IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
+        <IonContent className="ion-padding" style={{ fontSize: 14, lineHeight: 1.5 }}>
+          {legal === "terms" ? <TermsContent /> : <PrivacyContent />}
+        </IonContent>
+      </IonModal>
+
+      <IonFooter>
+        <IonToolbar>
+          <div
+            className="ion-text-center ion-padding-vertical"
+            style={{ fontSize: 12, display: "flex", justifyContent: "center", gap: 16 }}
+          >
+            <span onClick={() => setLegal("terms")} style={{ cursor: "pointer", color: "var(--ion-color-primary)" }}>
+              terms
+            </span>
+            <span style={{ color: "var(--ion-color-medium)" }}>·</span>
+            <span onClick={() => setLegal("privacy")} style={{ cursor: "pointer", color: "var(--ion-color-primary)" }}>
+              privacy
+            </span>
+          </div>
+        </IonToolbar>
+      </IonFooter>
     </IonApp>
   );
 }
