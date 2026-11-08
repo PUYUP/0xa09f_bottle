@@ -26,6 +26,7 @@ export interface IdentityRecord {
 export interface Envelope {
   kid: string | null;
   authorPublicKey: string;
+  recipientPublicKey?: string;
   wrapIv: string;
   wrappedKey: string;
   pickupHash: string;

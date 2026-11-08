@@ -33,10 +33,12 @@ CREATE INDEX IF NOT EXISTS bottles_parent_id_idx ON bottles (parent_id) WHERE pa
 CREATE TABLE IF NOT EXISTS bottle_kids (
   bottle_id  TEXT NOT NULL REFERENCES bottles(id) ON DELETE CASCADE,
   kid        TEXT NOT NULL,
+  pubkey     TEXT NOT NULL DEFAULT '',
   created_at BIGINT NOT NULL,
   PRIMARY KEY (bottle_id, kid)
 );
 CREATE INDEX IF NOT EXISTS bottle_kids_kid_idx ON bottle_kids (kid);
+ALTER TABLE bottle_kids ADD COLUMN IF NOT EXISTS pubkey TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
@@ -136,13 +138,22 @@ func (p *PGStore) backfillBottleKids(ctx context.Context) {
 		return
 	}
 	if _, err := p.pool.Exec(ctx, `
-INSERT INTO bottle_kids (bottle_id, kid, created_at)
-SELECT b.id, e->>'kid', b.created_at
+INSERT INTO bottle_kids (bottle_id, kid, pubkey, created_at)
+SELECT b.id, e->>'kid', COALESCE(e->>'recipientPublicKey', ''), b.created_at
 FROM bottles b, LATERAL jsonb_array_elements(b.envelopes) e
 WHERE e->>'kid' IS NOT NULL AND e->>'kid' <> ''
 ON CONFLICT DO NOTHING`); err != nil {
 		// Non-fatal: new bottles still populate the table going forward.
 		fmt.Printf("pg backfill bottle_kids: %v\n", err)
+	}
+	// Fill pubkey for rows created before envelopes carried recipientPublicKey.
+	if _, err := p.pool.Exec(ctx, `
+UPDATE bottle_kids k
+SET pubkey = e->>'recipientPublicKey'
+FROM bottles b, LATERAL jsonb_array_elements(b.envelopes) e
+WHERE k.bottle_id = b.id AND e->>'kid' = k.kid
+  AND k.pubkey = '' AND e->>'recipientPublicKey' IS NOT NULL`); err != nil {
+		fmt.Printf("pg backfill bottle_kids pubkey: %v\n", err)
 	}
 }
 
@@ -199,12 +210,16 @@ ON CONFLICT (id) DO UPDATE SET
 }
 
 // syncBottleKids rewrites the bottle_kids rows for a bottle so the
-// kid-filtered index always mirrors the envelopes JSONB.
+// kid-filtered index always mirrors the envelopes JSONB. pubkey is the
+// recipient pubkey embedded in each envelope, used later for
+// proof-of-possession verification.
 func (p *PGStore) syncBottleKids(ctx context.Context, b store.Bottle) error {
 	kids := make([]string, 0, len(b.Envelopes))
+	pubs := make([]string, 0, len(b.Envelopes))
 	for _, env := range b.Envelopes {
 		if env.KID != "" {
 			kids = append(kids, env.KID)
+			pubs = append(pubs, env.RecipientPublicKey)
 		}
 	}
 	if _, err := p.pool.Exec(ctx, `DELETE FROM bottle_kids WHERE bottle_id = $1`, b.ID); err != nil {
@@ -214,10 +229,32 @@ func (p *PGStore) syncBottleKids(ctx context.Context, b store.Bottle) error {
 		return nil
 	}
 	_, err := p.pool.Exec(ctx, `
-INSERT INTO bottle_kids (bottle_id, kid, created_at)
-SELECT $1, k, $3 FROM unnest($2::text[]) AS k
-ON CONFLICT DO NOTHING`, b.ID, kids, b.CreatedAt)
+INSERT INTO bottle_kids (bottle_id, kid, pubkey, created_at)
+SELECT $1, k.kid, k.pub, $4
+FROM unnest($2::text[], $3::text[]) AS k(kid, pub)
+ON CONFLICT (bottle_id, kid) DO NOTHING`, b.ID, kids, pubs, b.CreatedAt)
 	return err
+}
+
+// PubkeysForKid returns the distinct recipient pubkeys ever embedded for a
+// kid across all bottles. Used to verify proof-of-possession: a requester
+// must prove control of one of these keys to list kid-filtered bottles.
+func (p *PGStore) PubkeysForKid(ctx context.Context, kid string) ([]string, error) {
+	rows, err := p.pool.Query(ctx,
+		`SELECT DISTINCT pubkey FROM bottle_kids WHERE kid = $1 AND pubkey <> ''`, kid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var pubs []string
+	for rows.Next() {
+		var pub string
+		if err := rows.Scan(&pub); err != nil {
+			return nil, err
+		}
+		pubs = append(pubs, pub)
+	}
+	return pubs, rows.Err()
 }
 
 func (p *PGStore) UpdateDelivery(ctx context.Context, id string, deliveries int, status string, deliveredKids []string) error {

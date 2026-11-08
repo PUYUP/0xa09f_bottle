@@ -82,6 +82,7 @@ func validateBottle(b store.Bottle) error {
 	for _, env := range b.Envelopes {
 		if env.KID == "" || len(env.KID) > 128 ||
 			env.AuthorPublicKey == "" || len(env.AuthorPublicKey) > 8192 ||
+			len(env.RecipientPublicKey) > 8192 ||
 			env.WrapIV == "" || len(env.WrapIV) > 64 ||
 			env.WrappedKey == "" || len(env.WrappedKey) > 1024 ||
 			len(env.PickupHash) > 128 {
@@ -131,10 +132,25 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 		}
 	}
 
-	// Optional recipient filter: only bottles carrying at least one of the
-	// given envelope kids are returned. Used by clients to fetch just their
-	// own bottles instead of the entire corpus.
-	kidSet := parseKidFilter(c.Query("kids"))
+	// Bottle listings are gated by proof-of-possession: the client must hold
+	// a pop token issued for the exact kid set it wants to filter by. The
+	// token binds the request to keys the requester proved control of, so a
+	// third party cannot enumerate bottles addressed to other people's kids.
+	var kidSet map[string]struct{}
+	if token := c.Query("token"); token != "" {
+		if tokenKids, ok := s.store.PopTokenKids(c.Context(), token); ok {
+			kidSet = make(map[string]struct{}, len(tokenKids))
+			for _, k := range tokenKids {
+				kidSet[k] = struct{}{}
+			}
+		} else {
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired pop token")
+		}
+	} else if raw := c.Query("kids"); raw != "" {
+		return fiber.NewError(fiber.StatusForbidden, "proof of possession required")
+	} else {
+		return fiber.NewError(fiber.StatusBadRequest, "kids or token required")
+	}
 
 	var bottles []store.Bottle
 	if len(kidSet) > 0 {
@@ -252,12 +268,20 @@ func (s *Server) listBottleChildren(c fiber.Ctx) error {
 	if limit > 1000 {
 		limit = 1000
 	}
+	tokenKids, ok := s.store.PopTokenKids(c.Context(), c.Query("token"))
+	if !ok {
+		return fiber.NewError(fiber.StatusUnauthorized, "valid pop token required")
+	}
+	kidSet := make(map[string]struct{}, len(tokenKids))
+	for _, k := range tokenKids {
+		kidSet[k] = struct{}{}
+	}
 
 	seen := make(map[string]bool)
 	merged := make([]store.Bottle, 0, limit)
 	add := func(list []store.Bottle) {
 		for _, b := range list {
-			if b.ParentID != parentID || seen[b.ID] {
+			if b.ParentID != parentID || seen[b.ID] || !bottleMatchesKids(b, kidSet) {
 				continue
 			}
 			seen[b.ID] = true

@@ -66,10 +66,19 @@ func (h *eventHub) publish(bottle store.Bottle) {
 	}
 }
 
-// streamEvents serves GET /api/events?kids=k1,k2,... as an SSE stream.
-// Each matching new bottle produces `event: bottle` with {"id": ...}.
+// streamEvents serves GET /api/events?token=... as an SSE stream. The pop
+// token carries the kid set the client proved possession of; each matching
+// new bottle produces `event: bottle` with {"id": ...}.
 func (s *Server) streamEvents(c fiber.Ctx) error {
-	sub := s.events.subscribe(parseKidFilter(c.Query("kids")))
+	tokenKids, ok := s.store.PopTokenKids(c.Context(), c.Query("token"))
+	if !ok {
+		return fiber.NewError(fiber.StatusUnauthorized, "valid pop token required")
+	}
+	kids := make(map[string]struct{}, len(tokenKids))
+	for _, k := range tokenKids {
+		kids[k] = struct{}{}
+	}
+	sub := s.events.subscribe(kids)
 	defer s.events.unsubscribe(sub)
 
 	c.Set("Content-Type", "text/event-stream")

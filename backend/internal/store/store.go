@@ -40,9 +40,13 @@ type PoolKey struct {
 type Envelope struct {
 	KID             string `json:"kid"`
 	AuthorPublicKey string `json:"authorPublicKey"`
-	WrapIV          string `json:"wrapIv"`
-	WrappedKey      string `json:"wrappedKey"`
-	PickupHash      string `json:"pickupHash,omitempty"`
+	// RecipientPublicKey is the pubkey this envelope was wrapped to. It lets
+	// the server verify proof-of-possession for kid-scoped bottle access
+	// without ever seeing private keys or plaintext.
+	RecipientPublicKey string `json:"recipientPublicKey,omitempty"`
+	WrapIV             string `json:"wrapIv"`
+	WrappedKey         string `json:"wrappedKey"`
+	PickupHash         string `json:"pickupHash,omitempty"`
 }
 
 type Bottle struct {
@@ -799,6 +803,54 @@ func (s *Store) ListChildren(ctx context.Context, parentID string, limit int) ([
 		bottles = append(bottles, bottle)
 	}
 	return bottles, nil
+}
+
+// ---------- proof-of-possession tokens ----------
+// A pop token is issued after the client proves possession of the private
+// keys behind a set of envelope kids (ECDH challenge against the server
+// identity key). It authorizes kid-filtered bottle listings and the SSE
+// stream for exactly that kid set, for popTokenTTL.
+
+const (
+	popTokenPrefix = "a09f:pop:"
+	popTokenTTL    = 10 * time.Minute
+)
+
+type popTokenValue struct {
+	Kids []string `json:"kids"`
+}
+
+func (s *Store) IssuePopToken(ctx context.Context, kids []string) (string, error) {
+	buf := make([]byte, 24)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(buf)
+	raw, err := json.Marshal(popTokenValue{Kids: kids})
+	if err != nil {
+		return "", err
+	}
+	if err := s.rdb.Set(ctx, popTokenPrefix+token, raw, popTokenTTL).Err(); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// PopTokenKids returns the kid set a token was issued for, or nil if the
+// token is unknown/expired.
+func (s *Store) PopTokenKids(ctx context.Context, token string) ([]string, bool) {
+	if token == "" || len(token) > 128 {
+		return nil, false
+	}
+	raw, err := s.rdb.Get(ctx, popTokenPrefix+token).Result()
+	if err != nil {
+		return nil, false
+	}
+	var v popTokenValue
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		return nil, false
+	}
+	return v.Kids, true
 }
 
 var pickupScript = redis.NewScript(`

@@ -15,7 +15,7 @@ import {
   wrapSessionKey,
 } from "./crypto";
 import { idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
-import { claimUsername, deriveUserId, getIdentity, getIdentityRecord, resetIdentityCache } from "./identity";
+import { claimUsername, computeKidProof, deriveUserId, getIdentity, getIdentityRecord, getServerPub, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
   Bottle,
@@ -391,9 +391,9 @@ export async function reportBottle(bottleId: string) {
 
 // fetchBottleChildren returns direct replies to a bottle, oldest-first,
 // merged from the server's active set and archive.
-export async function fetchBottleChildren(parentId: string, limit = 200): Promise<Bottle[]> {
+export async function fetchBottleChildren(parentId: string, token: string, limit = 200): Promise<Bottle[]> {
   const { bottles = [] } = await api<{ bottles?: Bottle[] }>(
-    `/api/bottles/${encodeURIComponent(parentId)}/children?limit=${limit}`,
+    `/api/bottles/${encodeURIComponent(parentId)}/children?token=${encodeURIComponent(token)}&limit=${limit}`,
     { auth: false }
   );
   return bottles;
@@ -413,10 +413,9 @@ async function catchKidsParam(): Promise<string> {
       knownIds.add(r.bottle.id);
     }
   }
-  if (knownIds.size === 0) return "";
   // Only kids still able to receive NEW bottles: currently in-pool keys
   // (consumed/expired kids can never be targeted again — their old bottles
-  // are already in local records or covered by the bootstrap scan).
+  // are already in local records).
   const liveKids = state.ownPoolKids.size > 0
     ? [...state.ownPoolKids]
     : state.keys.filter((k) => k.depositedAt && (!k.expiresAt || k.expiresAt > Date.now())).map((k) => k.kid);
@@ -428,19 +427,78 @@ async function catchKidsParam(): Promise<string> {
   return parts.join(",");
 }
 
+// ---------- proof-of-possession ----------
+// Bottle listings require a pop token: the client proves control of each
+// kid's private key (ECDH challenge vs the server identity key) and gets a
+// short-lived token bound to exactly that kid set.
+
+async function privateJwkForKid(kid: string): Promise<JWK | null> {
+  if (kid.startsWith(SELF_PREFIX)) {
+    const idt = await getIdentity().catch(() => null);
+    return idt?.privateJwk ?? null;
+  }
+  if (kid.startsWith(REPLY_PREFIX)) {
+    const parentId = kid.slice(REPLY_PREFIX.length);
+    const stored = await idbGet<ThreadRecord>(META_STORE, kid).catch(() => null);
+    if (stored?.privateJwk) return stored.privateJwk;
+    const idt = await getIdentity().catch(() => null);
+    if (!idt?.privateJwk || !parentId) return null;
+    const kp = await deriveReplyKeyPair(idt.privateJwk, parentId);
+    return kp.privateJwk;
+  }
+  const rec = state.keys.find((k) => k.kid === kid);
+  return rec?.privateJwk ?? null;
+}
+
+let popCache: { kidsKey: string; token: string; exp: number } | null = null;
+
+async function popTokenFor(kids: string[]): Promise<string | null> {
+  if (!kids.length) return null;
+  const kidsKey = [...kids].sort().join(",");
+  if (popCache && popCache.kidsKey === kidsKey && popCache.exp > Date.now()) {
+    return popCache.token;
+  }
+  const serverPub = await getServerPub();
+  const proofs: Record<string, { ts: number; proof: string }> = {};
+  await Promise.all(
+    kids.map(async (kid) => {
+      const priv = await privateJwkForKid(kid);
+      if (!priv) return;
+      const proof = await computeKidProof(priv, serverPub, kid).catch(() => null);
+      if (proof) proofs[kid] = proof;
+    })
+  );
+  const { token, expiresIn } = await api<{ token?: string; expiresIn?: number }>(
+    "/api/auth/pop-token",
+    { method: "POST", body: JSON.stringify({ kids, proofs }) }
+  );
+  if (!token) return null;
+  popCache = { kidsKey, token, exp: Date.now() + ((expiresIn || 600) - 60) * 1000 };
+  return token;
+}
+
 export async function checkBottles() {
   let caught = 0;
   let scanned = 0;
   let cursor = "";
   const byKid = keyByKidMap();
 
-  // Recipient filter: ask the server for only bottles addressed to us.
+  // Recipient filter: prove possession of our kids and get a pop token;
+  // the server only returns bottles addressed to kids we control.
   const kidsParam = await catchKidsParam();
-  const kidsQuery = kidsParam ? `&kids=${encodeURIComponent(kidsParam)}` : "";
+  const kids = kidsParam ? kidsParam.split(",") : [];
+  const token = await popTokenFor(kids).catch((e) => {
+    log(`pop token failed: ${(e as Error).message}`, "warn");
+    return null;
+  });
+  if (!token) {
+    log("no provable keys; throw bait first", "warn");
+    return;
+  }
 
   for (let page = 0; page < 100; page++) {
     const { bottles = [], nextCursor = "" } = await api<{ bottles?: Bottle[]; nextCursor?: string }>(
-      `/api/bottles?limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}${kidsQuery}`,
+      `/api/bottles?limit=100&token=${encodeURIComponent(token)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
       { auth: false }
     );
     if (!bottles.length) break;
@@ -547,8 +605,15 @@ function scheduleCatchScan() {
 }
 
 export async function connectEvents() {
-  const kids = await catchKidsParam();
-  const url = `${API_BASE}/api/events${kids ? `?kids=${encodeURIComponent(kids)}` : ""}`;
+  const kidsParam = await catchKidsParam();
+  const token = kidsParam ? await popTokenFor(kidsParam.split(",")).catch(() => null) : null;
+  const url = token ? `${API_BASE}/api/events?token=${encodeURIComponent(token)}` : "";
+  if (!url) {
+    eventsSource?.close();
+    eventsSource = null;
+    eventsUrl = "";
+    return;
+  }
   if (url === eventsUrl && eventsSource) return;
   eventsSource?.close();
   eventsUrl = url;

@@ -156,6 +156,22 @@ func ProofHash(shared []byte, userID string, ts int64, nonce string) []byte {
 	return h.Sum(nil)
 }
 
+// PoPHash computes the kid-scoped proof-of-possession digest:
+//
+//	SHA-256( ecdhShared || "a09f-pop-v1" || kid || str(ts) )
+//
+// Unlike ProofHash it is not bound to a userId — it proves control of the
+// specific envelope kid's private key so the server can gate kid-filtered
+// bottle listings without learning anything about the plaintext.
+func PoPHash(shared []byte, kid string, ts int64) []byte {
+	h := sha256.New()
+	h.Write(shared)
+	h.Write([]byte("a09f-pop-v1"))
+	h.Write([]byte(kid))
+	h.Write([]byte(strconv.FormatInt(ts, 10)))
+	return h.Sum(nil)
+}
+
 // EncodeProof returns the base64 proof string a client must send.
 func EncodeProof(shared []byte, userID string, ts int64, nonce string) string {
 	return base64.StdEncoding.EncodeToString(ProofHash(shared, userID, ts, nonce))

@@ -172,6 +172,7 @@ export async function wrapSessionKey(
   return {
     kid: null as string | null,
     authorPublicKey: JSON.stringify(authorPublicJwk),
+    recipientPublicKey: JSON.stringify(recipientPublicKeyJwk),
     wrapIv: bytesToB64(iv),
     wrappedKey: bytesToB64(new Uint8Array(wrapped)),
     pickupHash,
