@@ -19,7 +19,7 @@ import {
   IonModal,
   IonFooter,
 } from "@ionic/react";
-import { send, refresh, fish, cloudUpload, cloudDownload, chatbox, trash } from "ionicons/icons";
+import { send, refresh, fish, cloudUpload, cloudDownload, chatbox, trash, helpCircle } from "ionicons/icons";
 import { getState, subscribe } from "@shared/store";
 import {
   init,
@@ -42,7 +42,7 @@ import type { ThreadRecord, IdentityRecord } from "@shared/types";
 import { MAX_THREAD_DEPTH } from "@shared/crypto";
 import { getIdentity, randomUsername as genName } from "@shared/identity";
 import { claimUsernameUI } from "@shared/store";
-import { TermsContent, PrivacyContent } from "./legal";
+import { TermsContent, PrivacyContent, HowItWorksContent } from "./legal";
 
 interface Row {
   node: ThreadNode;
@@ -60,7 +60,7 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [replyTarget, setReplyTarget] = useState<ThreadRecord | null>(null);
   const [baitOpen, setBaitOpen] = useState(false);
-  const [legal, setLegal] = useState<"terms" | "privacy" | null>(null);
+  const [legal, setLegal] = useState<"terms" | "privacy" | "how" | null>(null);
   const [busy, setBusy] = useState(false);
   const [identity, setIdentity] = useState<IdentityRecord | null>(null);
   const [claimName, setClaimName] = useState("");
@@ -176,6 +176,16 @@ export default function App() {
             >
               claim &amp; enter
             </IonButton>
+            <IonButton
+              expand="block"
+              fill="outline"
+              size="small"
+              className="ion-margin-top"
+              onClick={() => setLegal("how")}
+            >
+              <IonIcon icon={helpCircle} slot="start" />
+              how does this work?
+            </IonButton>
             <div className="ion-margin-top" style={{ borderTop: "1px solid var(--ion-color-light)", paddingTop: 12 }}>
               <p style={{ color: "var(--ion-color-medium)", fontSize: 13 }}>
                 coming back on a new device? your vault export holds the
@@ -211,6 +221,19 @@ export default function App() {
             </div>
           </div>
         </IonContent>
+        <IonModal isOpen={legal === "how"} onDidDismiss={() => setLegal(null)}>
+          <IonHeader>
+            <IonToolbar>
+              <IonTitle>how it works</IonTitle>
+              <IonButtons slot="end">
+                <IonButton onClick={() => setLegal(null)}>close</IonButton>
+              </IonButtons>
+            </IonToolbar>
+          </IonHeader>
+          <IonContent className="ion-padding" style={{ fontSize: 14, lineHeight: 1.5 }}>
+            <HowItWorksContent />
+          </IonContent>
+        </IonModal>
       </IonApp>
     );
   }
@@ -468,14 +491,16 @@ export default function App() {
       <IonModal isOpen={legal !== null} onDidDismiss={() => setLegal(null)}>
         <IonHeader>
           <IonToolbar>
-            <IonTitle>{legal === "terms" ? "terms of service" : "privacy policy"}</IonTitle>
+            <IonTitle>
+              {legal === "terms" ? "terms of service" : legal === "privacy" ? "privacy policy" : "how it works"}
+            </IonTitle>
             <IonButtons slot="end">
               <IonButton onClick={() => setLegal(null)}>close</IonButton>
             </IonButtons>
           </IonToolbar>
         </IonHeader>
         <IonContent className="ion-padding" style={{ fontSize: 14, lineHeight: 1.5 }}>
-          {legal === "terms" ? <TermsContent /> : <PrivacyContent />}
+          {legal === "terms" ? <TermsContent /> : legal === "privacy" ? <PrivacyContent /> : <HowItWorksContent />}
         </IonContent>
       </IonModal>
 
@@ -485,6 +510,10 @@ export default function App() {
             className="ion-text-center ion-padding-vertical"
             style={{ fontSize: 12, display: "flex", justifyContent: "center", gap: 16 }}
           >
+            <span onClick={() => setLegal("how")} style={{ cursor: "pointer", color: "var(--ion-color-primary)" }}>
+              how it works
+            </span>
+            <span style={{ color: "var(--ion-color-medium)" }}>·</span>
             <span onClick={() => setLegal("terms")} style={{ cursor: "pointer", color: "var(--ion-color-primary)" }}>
               terms
             </span>

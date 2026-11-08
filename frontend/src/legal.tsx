@@ -58,6 +58,184 @@ export function TermsContent() {
   );
 }
 
+export function HowItWorksContent() {
+  return (
+    <>
+      <h2>How a09f works</h2>
+      <p>
+        a09f is a messaging service shaped like a game of chance: you throw
+        messages into a shared ocean, and strangers may pick them up. The twist
+        is that every message is locked with a padlock that only the intended
+        reader owns — the service itself is just the courier and never holds
+        the key.
+      </p>
+
+      <h3>The one big idea</h3>
+      <p>
+        Normally, a messaging server must be able to read your messages to
+        deliver them. a09f flips this: your device encrypts each message
+        <em> before it is sent</em>, and only the recipient's device can undo
+        the encryption. The server stores and forwards only scrambled
+        ciphertext — it is mathematically unable to read what you wrote, and
+        it never possesses anyone's private key.
+      </p>
+
+      <h3>1. Your device makes keys — and keeps them</h3>
+      <p>
+        The moment you open the app, your device generates a pair of digital
+        keys: a <strong>public key</strong> (safe to share — it only locks
+        things) and a <strong>private key</strong> (the only thing that can
+        unlock them). The private key is generated inside your browser or
+        phone and stored only there. It is never sent anywhere — not to the
+        server, not to us, not to anyone.
+      </p>
+      <p>
+        Think of it like a mailbox: the public key is the slot you publish so
+        strangers can drop letters in; the private key is the physical key
+        that opens the box. Only you hold it.
+      </p>
+
+      <h3>2. Throwing bait — announcing "I am catchable"</h3>
+      <p>
+        To receive messages, you deposit bait: your device generates fresh
+        keypairs and publishes only their <em>public</em> halves into a shared
+        pool on the server. Each bait key is like a fishing float — it sits in
+        the water advertising "messages may be cast to this spot."
+      </p>
+      <p>
+        The server sees a list of public keys and nothing else. It cannot tell
+        which keys belong to the same person, and it cannot read anything
+        addressed to them.
+      </p>
+
+      <h3>3. Casting a message — sealing the bottle</h3>
+      <p>
+        When you write a message, your device performs two locks in sequence:
+      </p>
+      <ul>
+        <li>
+          <strong>First lock (AES-256-GCM):</strong> the message text is
+          encrypted into scrambled ciphertext using a one-time random session
+          key. This is military-grade symmetric encryption — the same family
+          used for HTTPS and disk encryption.
+        </li>
+        <li>
+          <strong>Second lock (key wrapping):</strong> that session key is
+          itself encrypted separately for each intended recipient, using a
+          handshake called ECDH (elliptic-curve Diffie–Hellman) on the
+          P-256 curve. Each recipient gets their own wrapped copy — like
+          putting the same letter into several envelopes, each sealed with a
+          different recipient's lock.
+        </li>
+      </ul>
+      <p>
+        The result — one ciphertext plus a handful of wrapped keys — is what
+        gets sent to the server. Recipients are chosen randomly from the bait
+        pool, so even the sender does not fully control who might read it.
+        That is the "message in a bottle" part: you cast, the sea decides.
+      </p>
+
+      <h3>4. Catching — proving it's yours, then opening</h3>
+      <p>
+        When a bottle might be addressed to you, the app checks each bait key
+        you own. For each candidate, it must prove to the server that it
+        actually holds the matching private key — a cryptographic
+        proof-of-possession, like showing a passport instead of just stating
+        a name. Only then does the server release the bottle to you.
+      </p>
+      <p>
+        Once released, your device reverses the locks entirely on-device: it
+        unwraps the session key meant for your bait, then decrypts the
+        ciphertext back into readable text. The plaintext never travels over
+        the network at any point.
+      </p>
+
+      <h3>5. Replies and threads</h3>
+      <p>
+        Every message can be replied to, forming threads up to 20 levels deep.
+        Replies are sealed the same way, addressed to the parent message's
+        author through a special deterministic reply key — your device can
+        always re-derive the key it needs to read replies on its own messages,
+        without storing extra secrets.
+      </p>
+      <p>
+        Your inbox groups replies under their original message, badges threads
+        with new activity, and sorts by the most recent reply — similar to how
+        a chat app organizes conversations, except nobody knows who is on the
+        other end unless they choose to say so.
+      </p>
+
+      <h3>6. Usernames — optional, but useful</h3>
+      <p>
+        The app asks for a username so the community features have someone to
+        point at: blocking, reporting, and public profiles. A username is bound
+        to your device's identity key — it is not a real-name account, there
+        is no email, no password, and no central login. Lose the device without
+        a vault export and the username becomes unreachable forever; that is
+        the price of true anonymity.
+      </p>
+      <p>
+        Signing in on a new device works through your <strong>vault
+        export</strong>: an encrypted backup file containing only your private
+        keys, protected by a passphrase you choose. Import it and your
+        username, bait, and ability to read old messages all come back.
+      </p>
+
+      <h3>7. Safety tools — block, report, delete</h3>
+      <ul>
+        <li>
+          <strong>Block</strong> — stops a user from reaching your bait with
+          new casts or replies. It is a social filter, not a cryptographic
+          wall: a determined anonymous sender can still cast into the pool,
+          because anonymity means the server cannot always tell who is casting.
+        </li>
+        <li>
+          <strong>Report</strong> — files a moderation ticket with the bottle
+          ID and an optional reason. Reports store only references, never
+          plaintext.
+        </li>
+        <li>
+          <strong>Delete</strong> — authors can delete their own messages. The
+          server verifies ownership cryptographically, then shreds the
+          ciphertext and keeps only an empty tombstone so everyone's apps learn
+          the message is gone. Deleting your message does not delete other
+          people's replies — they own those.
+        </li>
+      </ul>
+
+      <h3>8. What the server honestly cannot hide</h3>
+      <p>
+        Encryption protects <em>content</em>, not <em>existence</em>. The relay
+        necessarily sees some things:
+      </p>
+      <ul>
+        <li>That a message was sent, when, and roughly how large it is.</li>
+        <li>The shape of conversations — which bottle replied to which — as
+          opaque IDs.</li>
+        <li>Your IP address, used transiently for rate limiting (use Tor
+          Browser if that matters to you).</li>
+        <li>Which public keys are in the bait pool and when they expire.</li>
+      </ul>
+      <p>
+        What it cannot see: the text of any message, who is really typing it,
+        or any private key. If the server itself were fully compromised, an
+        attacker would still only obtain ciphertext and public keys — useless
+        without the private keys that never left your devices.
+      </p>
+
+      <h3>Glossary</h3>
+      <ul>
+        <li><strong>Bait / key</strong> — a public key you deposit to receive messages.</li>
+        <li><strong>Cast</strong> — sending a message into the pool.</li>
+        <li><strong>Catch</strong> — a message that arrived for your bait.</li>
+        <li><strong>Bottle</strong> — one encrypted message plus its wrapped keys.</li>
+        <li><strong>Vault</strong> — your encrypted export of private keys.</li>
+        <li><strong>Relay / server</strong> — the blind courier that stores ciphertext.</li>
+      </ul>
+    </>
+  );
+}
+
 export function PrivacyContent() {
   return (
     <>

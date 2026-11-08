@@ -19,8 +19,35 @@ import {
 } from "./lib/store";
 import { getIdentity, randomUsername as genName } from "./lib/identity";
 import { claimUsernameUI } from "./lib/store";
-import { TermsContent, PrivacyContent } from "./legal";
+import { TermsContent, PrivacyContent, HowItWorksContent } from "./legal";
 import type { ThreadNode } from "./lib/store";
+
+type DocKind = "terms" | "privacy" | "how";
+
+const DOC_TITLES: Record<DocKind, string> = {
+  terms: "terms of service",
+  privacy: "privacy policy",
+  how: "how it works",
+};
+
+function DocModal({ kind, onClose }: { kind: DocKind; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={onClose}
+    >
+      <div className="bevel max-h-[80vh] w-[34rem] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
+        <div className="retro-titlebar">
+          <span>{DOC_TITLES[kind]}</span>
+          <button className="retro-btn" style={{ padding: "0 6px" }} onClick={onClose}>✕</button>
+        </div>
+        <div className="retro-body max-h-[60vh] overflow-y-auto text-[14px] leading-relaxed">
+          {kind === "terms" ? <TermsContent /> : kind === "privacy" ? <PrivacyContent /> : <HowItWorksContent />}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // UsernameGate blocks the whole app until a username is claimed. A random
 // default is prefilled; the dice button regenerates it.
@@ -29,6 +56,7 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [notice, setNotice] = useState("");
+  const [showHow, setShowHow] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const claim = () => {
     const v = name.trim();
@@ -116,8 +144,14 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
               }}
             />
           </div>
+          <div className="border-t border-neutral-300 pt-2 text-center">
+            <span className="retro-link" onClick={() => setShowHow(true)}>
+              ❓ how does this work?
+            </span>
+          </div>
         </div>
       </div>
+      {showHow && <DocModal kind="how" onClose={() => setShowHow(false)} />}
     </main>
   );
 }
@@ -127,7 +161,7 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [baitTtl, setBaitTtl] = useState("86400");
   const [baitDialog, setBaitDialog] = useState(false);
-  const [legal, setLegal] = useState<"terms" | "privacy" | null>(null);
+  const [legal, setLegal] = useState<DocKind | null>(null);
   const [page, setPage] = useState<"catch" | "pool" | "bait" | "account">("catch");
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [threadLimit, setThreadLimit] = useState(10);
@@ -570,25 +604,12 @@ export default function App() {
       )}
 
       {/* ── terms & privacy ────────────────────────────────── */}
-      {legal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
-          onClick={() => setLegal(null)}
-        >
-          <div className="bevel max-h-[80vh] w-[34rem] max-w-[92vw]" onClick={(e) => e.stopPropagation()}>
-            <div className="retro-titlebar">
-              <span>{legal === "terms" ? "terms of service" : "privacy policy"}</span>
-              <button className="retro-btn" style={{ padding: "0 6px" }} onClick={() => setLegal(null)}>✕</button>
-            </div>
-            <div className="retro-body max-h-[60vh] overflow-y-auto text-[14px] leading-relaxed">
-              {legal === "terms" ? <TermsContent /> : <PrivacyContent />}
-            </div>
-          </div>
-        </div>
-      )}
+      {legal && <DocModal kind={legal} onClose={() => setLegal(null)} />}
 
       <p className="mt-3 text-center text-[13px] text-neutral-600">
         a09f · best viewed at 800×600 · works in netscape navigator · no cookies were harmed
+        {" · "}
+        <span className="retro-link" onClick={() => setLegal("how")}>how it works</span>
         {" · "}
         <span className="retro-link" onClick={() => setLegal("terms")}>terms</span>
         {" · "}
