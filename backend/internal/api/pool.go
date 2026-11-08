@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"a09f/bottle/internal/pgstore"
 	"a09f/bottle/internal/store"
 
 	"github.com/gofiber/fiber/v3"
@@ -115,7 +116,85 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "fetch failed")
 	}
+	if s.pg != nil && len(keys) > 0 {
+		fetched := make([]string, 0, len(keys))
+		for _, k := range keys {
+			fetched = append(fetched, k.KID)
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.pg.MarkPoolKeysConsumed(ctx, fetched); err != nil {
+				log.Printf("pg mark consumed: %v", err)
+			}
+		}()
+	}
 	return c.JSON(fiber.Map{"keys": keys})
+}
+
+type poolStatusRequest struct {
+	Kids []string `json:"kids"`
+}
+
+type poolStatusEntry struct {
+	KID        string `json:"kid"`
+	InPool     bool   `json:"inPool"`
+	Registered bool   `json:"registered"`
+	Consumed   bool   `json:"consumed"`
+	ExpiresAt  int64  `json:"expiresAt"`
+}
+
+// poolStatus reports, per kid, whether it is live in the Redis pool and what
+// the Postgres registry says about it (registered, consumed, expiry). Clients
+// use it to detect keys lost from the pool (e.g. after a Redis collapse) so
+// they can be re-deposited. Pool membership and pubkeys are already public;
+// this exposes nothing beyond that.
+func (s *Server) poolStatus(c fiber.Ctx) error {
+	var req poolStatusRequest
+	if err := bindJSON(c, &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+	}
+	seen := make(map[string]struct{}, len(req.Kids))
+	kids := make([]string, 0, len(req.Kids))
+	for _, kid := range req.Kids {
+		if !validPopKid(kid) {
+			continue
+		}
+		if _, dup := seen[kid]; dup {
+			continue
+		}
+		seen[kid] = struct{}{}
+		kids = append(kids, kid)
+		if len(kids) >= 200 {
+			break
+		}
+	}
+	if len(kids) == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "no valid kids")
+	}
+	inPool, err := s.store.PoolKidsExist(c.Context(), kids)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "status failed")
+	}
+	var reg map[string]pgstore.PoolKeyState
+	if s.pg != nil {
+		reg, err = s.pg.PoolKeyStates(c.Context(), kids)
+		if err != nil {
+			log.Printf("pg pool status: %v", err)
+			reg = nil
+		}
+	}
+	out := make([]poolStatusEntry, 0, len(kids))
+	for _, kid := range kids {
+		entry := poolStatusEntry{KID: kid, InPool: inPool[kid]}
+		if st, ok := reg[kid]; ok {
+			entry.Registered = st.Found
+			entry.Consumed = st.Consumed
+			entry.ExpiresAt = st.ExpiresAt
+		}
+		out = append(out, entry)
+	}
+	return c.JSON(fiber.Map{"kids": out})
 }
 
 func (s *Server) listPoolKeys(c fiber.Ctx) error {
@@ -136,6 +215,30 @@ func (s *Server) listPoolKeys(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
 	}
 	return c.JSON(fiber.Map{"keys": keys, "size": size})
+}
+
+// rebuildPool restores the Redis bait pool from key_registry on boot. It is
+// the recovery path for a Redis collapse: registry rows that are unconsumed,
+// unexpired, and never wrapped into a bottle go back into the pool with
+// their original expiry. The deposit script dedupes by kid, so running it
+// against an intact pool is a harmless no-op.
+func (s *Server) rebuildPool(ctx context.Context) {
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	keys, err := s.pg.LivePoolKeys(rctx, time.Now().Unix())
+	if err != nil {
+		log.Printf("pool rebuild query: %v", err)
+		return
+	}
+	if len(keys) == 0 {
+		return
+	}
+	n, err := s.store.RestorePoolKeys(rctx, keys)
+	if err != nil {
+		log.Printf("pool rebuild restore: %v", err)
+		return
+	}
+	log.Printf("pool rebuild: restored %d/%d live key(s) from registry", n, len(keys))
 }
 
 func (s *Server) listPoolKids(c fiber.Ctx) error {

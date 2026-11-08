@@ -241,6 +241,41 @@ func (s *Store) DepositKeys(ctx context.Context, keys []PoolKey) error {
 	return err
 }
 
+// RestorePoolKeys re-inserts pool members using their recorded ExpiresAt
+// verbatim — unlike DepositKeys it never recomputes TTL. Used to rebuild the
+// pool from the Postgres key_registry after a Redis loss. The deposit
+// script's kid dedupe makes re-adding already-present keys a no-op.
+func (s *Store) RestorePoolKeys(ctx context.Context, keys []PoolKey) (int, error) {
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	now := time.Now()
+	items := make([]depositItem, 0, len(keys))
+	for i := range keys {
+		if keys[i].ExpiresAt <= now.Unix() {
+			continue
+		}
+		member, err := encodePoolMember(keys[i], keys[i].ExpiresAt)
+		if err != nil {
+			return 0, err
+		}
+		items = append(items, depositItem{Member: member, Score: keys[i].ExpiresAt, KID: keys[i].KID})
+	}
+	if len(items) == 0 {
+		return 0, nil
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return 0, err
+	}
+	res, err := depositKeysScript.Run(ctx, s.rdb, []string{poolKey, kidsKey}, string(raw), now.Unix(), s.maxPool).Result()
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.(int64)
+	return int(n), nil
+}
+
 // fetchKeysScript picks `count` random members, biased toward the
 // requester's timezone zone when ARGV[4] carries a tz offset (minutes east
 // of UTC). Roughly 60% of picks prefer members whose offset is within
@@ -509,6 +544,31 @@ func (s *Store) sweepPool(ctx context.Context) {
 		_ = s.rdb.ZRem(ctx, poolKey, args...).Err()
 	}
 	_ = s.rdb.ZRemRangeByScore(ctx, kidsKey, "-inf", max).Err()
+}
+
+// PoolKidsExist reports which of the given kids currently have a live
+// (unexpired) member in the pool, via pipelined ZSCORE lookups.
+func (s *Store) PoolKidsExist(ctx context.Context, kids []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(kids))
+	if len(kids) == 0 {
+		return out, nil
+	}
+	pipe := s.rdb.Pipeline()
+	cmds := make([]*redis.FloatCmd, 0, len(kids))
+	for _, kid := range kids {
+		cmds = append(cmds, pipe.ZScore(ctx, kidsKey, kid))
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	for i, kid := range kids {
+		score, err := cmds[i].Result()
+		if err == nil && int64(score) > now {
+			out[kid] = true
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) ListPoolKids(ctx context.Context, limit int) ([]string, int64, error) {

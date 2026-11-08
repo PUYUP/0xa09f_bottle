@@ -1,4 +1,4 @@
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { subscribe } from "../lib/store";
 import { getIdentityRecord, randomUsername as genName } from "../lib/identity";
 import {
@@ -6,6 +6,7 @@ import {
   claimUsernameUI,
   exportVault,
   fetchMyStats,
+  fetchPoolStatus,
   formatExpiry,
   formatTTL,
   getClientMeta,
@@ -14,9 +15,10 @@ import {
   refreshActivePoolKeys,
   refreshBlocks,
   refreshPoolKeys,
+  restorePoolKeys,
   unblockUser,
 } from "../lib/store";
-import type { ClientMeta, UserStats } from "../lib/store";
+import type { ClientMeta, PoolKeyStatus, UserStats } from "../lib/store";
 import { useApp } from "../hooks/useApp";
 import type { KeyRecord } from "../lib/types";
 
@@ -48,12 +50,83 @@ export function MyKeysPanel({ onClose }: { onClose: () => void }) {
   const [shown, setShown] = useState(BAIT_PAGE);
   const visible = keys.slice(0, shown);
   const [refreshed, setRefreshed] = useState(false);
+  const [statuses, setStatuses] = useState<Map<string, PoolKeyStatus> | null>(null);
+  const [syncBusy, setSyncBusy] = useState(false);
   if (!refreshed) {
     setRefreshed(true);
     refreshActivePoolKeys().catch(() => {});
   }
+
+  const checkSync = () => {
+    const deposited = keys.filter((k) => k.depositedAt).map((k) => k.kid);
+    if (!deposited.length) {
+      setStatuses(new Map());
+      return;
+    }
+    setSyncBusy(true);
+    fetchPoolStatus(deposited)
+      .then((list) => setStatuses(new Map(list.map((s) => [s.kid, s]))))
+      .catch(() => setStatuses(null))
+      .finally(() => setSyncBusy(false));
+  };
+  useEffect(checkSync, []);
+
+  // "Lost" = deposited, unexpired client-side, absent from the live pool,
+  // and the registry says it was never consumed — the Redis-collapse case.
+  const nowMs = Date.now();
+  const lost = keys.filter((k) => {
+    if (!k.depositedAt || (k.expiresAt && k.expiresAt <= nowMs)) return false;
+    const st = statuses?.get(k.kid);
+    return !!st && !st.inPool && !st.consumed;
+  });
+  const usedCount = keys.filter((k) => {
+    if (!k.depositedAt) return false;
+    const st = statuses?.get(k.kid);
+    return !!st && st.consumed;
+  }).length;
+
   return (
     <Panel title={`🪱 my bait (${keys.length})`} onClose={onClose}>
+      <div className="bevel-in mb-2 p-2 text-[13px]">
+        <div className="mb-1 flex items-center justify-between">
+          <b>🔄 pool sync</b>
+          <button className="retro-btn" style={{ padding: "0 8px" }} disabled={syncBusy} onClick={checkSync}>
+            {syncBusy ? "checking…" : "check"}
+          </button>
+        </div>
+        {statuses === null ? (
+          <div className="text-neutral-600">status unavailable</div>
+        ) : lost.length === 0 ? (
+          <div className="text-green-700">
+            all live keys are in the pool{usedCount > 0 ? ` · ${usedCount} used` : ""}
+          </div>
+        ) : (
+          <>
+            <div className="mb-1 text-amber-700">
+              ⚠ {lost.length} key(s) missing from pool{usedCount > 0 ? ` · ${usedCount} used` : ""} — re-deposit to restore
+            </div>
+            <div className="mb-1 font-mono text-[12px] text-neutral-600">
+              {lost.map((k) => k.kid.slice(0, 13) + "…").join("  ")}
+            </div>
+            <button
+              className="retro-btn"
+              disabled={syncBusy}
+              onClick={() => {
+                setSyncBusy(true);
+                restorePoolKeys(lost)
+                  .then((n) => {
+                    log(`restored ${n} key(s) to the pool`);
+                    checkSync();
+                  })
+                  .catch((e) => log(`restore failed: ${(e as Error).message}`, "err"))
+                  .finally(() => setSyncBusy(false));
+              }}
+            >
+              restore {lost.length} key{lost.length === 1 ? "" : "s"}
+            </button>
+          </>
+        )}
+      </div>
       <div className="max-h-80 overflow-y-auto">
       <table className="w-full text-[13px]">
         <tbody>

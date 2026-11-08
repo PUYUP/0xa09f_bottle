@@ -964,6 +964,64 @@ export async function importVaultFile(file: File) {
 
 // ---------- panels ----------
 
+export interface PoolKeyStatus {
+  kid: string;
+  inPool: boolean;
+  registered: boolean;
+  consumed: boolean;
+  expiresAt: number; // unix seconds, 0 when unregistered
+}
+
+// fetchPoolStatus asks the server to compare our kids against the live Redis
+// pool and the Postgres registry — the authoritative way to spot keys lost
+// from the pool (e.g. after a Redis collapse) versus legitimately consumed.
+export async function fetchPoolStatus(kids: string[]): Promise<PoolKeyStatus[]> {
+  const out: PoolKeyStatus[] = [];
+  for (let i = 0; i < kids.length; i += 200) {
+    const { kids: res = [] } = await api<{ kids?: PoolKeyStatus[] }>("/api/pool/status", {
+      method: "POST",
+      body: JSON.stringify({ kids: kids.slice(i, i + 200) }),
+    });
+    out.push(...res);
+  }
+  return out;
+}
+
+// restorePoolKeys re-deposits the given key records with their remaining
+// TTL — the recovery path for pool members lost from Redis. depositedAt and
+// expiresAt are refreshed client-side to match.
+export async function restorePoolKeys(records: KeyRecord[]) {
+  if (!records.length) return 0;
+  const now = Date.now();
+  const idt = await getIdentity().catch(() => null);
+  const owner = idt?.publicJwk ? await deriveUserId(idt.publicJwk) : "";
+  await api("/api/pool/deposit", {
+    method: "POST",
+    body: JSON.stringify({
+      keys: records.map((k) => ({
+        kid: k.kid,
+        publicKey: JSON.stringify(k.publicJwk),
+        ttlSeconds: k.expiresAt
+          ? Math.min(2592000, Math.max(60, Math.ceil((k.expiresAt - now) / 1000)))
+          : 86400,
+        tzOffset: -new Date().getTimezoneOffset(),
+        owner,
+      })),
+    }),
+  });
+  for (const k of records) {
+    const ttl = k.expiresAt
+      ? Math.min(2592000, Math.max(60, Math.ceil((k.expiresAt - now) / 1000)))
+      : 86400;
+    k.depositedAt = now;
+    k.expiresAt = now + ttl * 1000;
+    await idbPut(KEY_STORE, k);
+  }
+  await loadKeys();
+  refreshPoolKeys(0).catch(() => {});
+  return records.length;
+}
+
 export async function refreshPoolKeys(offset = 0) {
   const { keys = [], size = 0 } = await api<{ keys?: PoolKeyInfo[]; size?: number }>(
     `/api/pool/keys?limit=500&offset=${offset}`,

@@ -43,13 +43,21 @@ ALTER TABLE bottle_kids ADD COLUMN IF NOT EXISTS pubkey TEXT NOT NULL DEFAULT ''
 
 -- key_registry binds kid -> recipient pubkey from deposit time onward, so
 -- proof-of-possession can be verified before any bottle references the kid.
+-- expires_at/consumed_at/tz_offset mirror the Redis pool member so the
+-- active pool can be rebuilt from Postgres after a Redis loss.
 CREATE TABLE IF NOT EXISTS key_registry (
   kid         TEXT PRIMARY KEY,
   public_key  TEXT NOT NULL,
   owner       TEXT NOT NULL DEFAULT '',
-  created_at  BIGINT NOT NULL
+  created_at  BIGINT NOT NULL,
+  expires_at  BIGINT NOT NULL DEFAULT 0,
+  consumed_at BIGINT NOT NULL DEFAULT 0,
+  tz_offset   INT
 );
 CREATE INDEX IF NOT EXISTS key_registry_owner_idx ON key_registry (owner);
+ALTER TABLE key_registry ADD COLUMN IF NOT EXISTS expires_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE key_registry ADD COLUMN IF NOT EXISTS consumed_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE key_registry ADD COLUMN IF NOT EXISTS tz_offset INT;
 
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
@@ -256,6 +264,8 @@ ON CONFLICT (bottle_id, kid) DO NOTHING`, b.ID, kids, pubs, b.CreatedAt)
 
 // RegisterPoolKeys upserts kid -> pubkey bindings collected at deposit time.
 // Best-effort: failures are logged by the caller, never block deposits.
+// Re-depositing a kid refreshes expires_at/tz_offset/owner and clears
+// consumed_at — the key is alive in the pool again.
 func (p *PGStore) RegisterPoolKeys(ctx context.Context, keys []store.PoolKey) error {
 	if len(keys) == 0 {
 		return nil
@@ -263,18 +273,114 @@ func (p *PGStore) RegisterPoolKeys(ctx context.Context, keys []store.PoolKey) er
 	kids := make([]string, 0, len(keys))
 	pubs := make([]string, 0, len(keys))
 	owners := make([]string, 0, len(keys))
+	exps := make([]int64, 0, len(keys))
+	tzs := make([]string, 0, len(keys))
 	now := time.Now().Unix()
 	for _, k := range keys {
 		kids = append(kids, k.KID)
 		pubs = append(pubs, k.PublicKey)
 		owners = append(owners, k.Owner)
+		exps = append(exps, k.ExpiresAt)
+		tz := ""
+		if k.TZOffset != nil {
+			tz = fmt.Sprintf("%d", *k.TZOffset)
+		}
+		tzs = append(tzs, tz)
 	}
 	_, err := p.pool.Exec(ctx, `
-INSERT INTO key_registry (kid, public_key, owner, created_at)
-SELECT k.kid, k.pub, k.owner, $4
-FROM unnest($1::text[], $2::text[], $3::text[]) AS k(kid, pub, owner)
-ON CONFLICT (kid) DO NOTHING`, kids, pubs, owners, now)
+INSERT INTO key_registry (kid, public_key, owner, created_at, expires_at, tz_offset)
+SELECT k.kid, k.pub, k.owner, $5, k.exp, NULLIF(k.tz, '')::int
+FROM unnest($1::text[], $2::text[], $3::text[], $4::bigint[], $6::text[]) AS k(kid, pub, owner, exp, tz)
+ON CONFLICT (kid) DO UPDATE SET
+  expires_at = EXCLUDED.expires_at,
+  tz_offset = EXCLUDED.tz_offset,
+  owner = EXCLUDED.owner,
+  consumed_at = 0`, kids, pubs, owners, exps, now, tzs)
 	return err
+}
+
+// MarkPoolKeysConsumed records that pool keys were handed out by a fetch.
+// Best-effort bookkeeping for pool rebuilds; fetch itself never depends on it.
+func (p *PGStore) MarkPoolKeysConsumed(ctx context.Context, kids []string) error {
+	if len(kids) == 0 {
+		return nil
+	}
+	_, err := p.pool.Exec(ctx, `
+UPDATE key_registry SET consumed_at = $2
+WHERE kid = ANY($1::text[]) AND consumed_at = 0`, kids, time.Now().Unix())
+	return err
+}
+
+// PoolKeyState is the registry-side view of one pool kid used by the
+// pool-status endpoint: expiry plus whether the key was ever consumed
+// (explicit consumed_at, or implied by appearing in bottle_kids for
+// consumption that predates the column).
+type PoolKeyState struct {
+	ExpiresAt int64
+	Consumed  bool
+	Found     bool
+}
+
+// PoolKeyStates returns registry state for a set of kids. Kids absent from
+// the registry report Found=false.
+func (p *PGStore) PoolKeyStates(ctx context.Context, kids []string) (map[string]PoolKeyState, error) {
+	out := make(map[string]PoolKeyState, len(kids))
+	if len(kids) == 0 {
+		return out, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+SELECT kid, expires_at, consumed_at,
+       EXISTS(SELECT 1 FROM bottle_kids bk WHERE bk.kid = key_registry.kid) AS in_bottles
+FROM key_registry
+WHERE kid = ANY($1::text[])`, kids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var kid string
+		var st PoolKeyState
+		var consumedAt int64
+		var inBottles bool
+		if err := rows.Scan(&kid, &st.ExpiresAt, &consumedAt, &inBottles); err != nil {
+			return nil, err
+		}
+		st.Found = true
+		st.Consumed = consumedAt > 0 || inBottles
+		out[kid] = st
+	}
+	return out, rows.Err()
+}
+
+// LivePoolKeys returns registry entries that should be in the active pool:
+// not consumed, not expired, and never wrapped into a bottle. The bottle_kids
+// exclusion covers consumption that happened before consumed_at existed.
+func (p *PGStore) LivePoolKeys(ctx context.Context, now int64) ([]store.PoolKey, error) {
+	rows, err := p.pool.Query(ctx, `
+SELECT kid, public_key, owner, expires_at, tz_offset
+FROM key_registry kr
+WHERE kr.consumed_at = 0
+  AND kr.expires_at > $1
+  AND NOT EXISTS (SELECT 1 FROM bottle_kids bk WHERE bk.kid = kr.kid)
+ORDER BY kr.created_at ASC`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []store.PoolKey
+	for rows.Next() {
+		var k store.PoolKey
+		var tz *int32
+		if err := rows.Scan(&k.KID, &k.PublicKey, &k.Owner, &k.ExpiresAt, &tz); err != nil {
+			return nil, err
+		}
+		if tz != nil {
+			v := int(*tz)
+			k.TZOffset = &v
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
 }
 
 // PubkeysForKid returns every pubkey ever bound to a kid: deposit-time

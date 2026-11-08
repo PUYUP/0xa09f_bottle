@@ -31,6 +31,7 @@ type Server struct {
 func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
 	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub()}
 	if pg != nil {
+		go s.rebuildPool(ctx)
 		go s.pgReconciler(ctx)
 	}
 	app := fiber.New(fiber.Config{
@@ -88,6 +89,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Get("/api/health/ready", s.ready)
 	app.Post("/api/pool/deposit", depositLimiter, s.depositKeys)
 	app.Post("/api/pool/fetch", fetchLimiter, s.fetchKeys)
+	app.Post("/api/pool/status", fetchLimiter, s.poolStatus)
 	app.Get("/api/pool/keys", s.listPoolKeys)
 	app.Get("/api/pool/kids", s.listPoolKids)
 	app.Post("/api/bottles", bottleLimiter, s.createBottle)
