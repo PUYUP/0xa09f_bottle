@@ -199,7 +199,15 @@ func (p *PGStore) SaveBottle(ctx context.Context, b store.Bottle) error {
 			return err
 		}
 	}
-	_, err = p.pool.Exec(ctx, `
+	// Bottle row and its bottle_kids index rows commit atomically: a bottle
+	// must never exist without its kid index, or kid-filtered listings
+	// would silently miss it until the reconciler heals the gap.
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `
 INSERT INTO bottles (id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 ON CONFLICT (id) DO UPDATE SET
@@ -217,14 +225,13 @@ ON CONFLICT (id) DO UPDATE SET
 	if err != nil {
 		return err
 	}
-	return p.syncBottleKids(ctx, b)
+	if err := syncBottleKidsTx(ctx, tx, b); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-// syncBottleKids rewrites the bottle_kids rows for a bottle so the
-// kid-filtered index always mirrors the envelopes JSONB. pubkey is the
-// recipient pubkey embedded in each envelope, used later for
-// proof-of-possession verification.
-func (p *PGStore) syncBottleKids(ctx context.Context, b store.Bottle) error {
+func syncBottleKidsTx(ctx context.Context, tx pgx.Tx, b store.Bottle) error {
 	kids := make([]string, 0, len(b.Envelopes))
 	pubs := make([]string, 0, len(b.Envelopes))
 	for _, env := range b.Envelopes {
@@ -233,13 +240,13 @@ func (p *PGStore) syncBottleKids(ctx context.Context, b store.Bottle) error {
 			pubs = append(pubs, env.RecipientPublicKey)
 		}
 	}
-	if _, err := p.pool.Exec(ctx, `DELETE FROM bottle_kids WHERE bottle_id = $1`, b.ID); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM bottle_kids WHERE bottle_id = $1`, b.ID); err != nil {
 		return err
 	}
 	if len(kids) == 0 {
 		return nil
 	}
-	_, err := p.pool.Exec(ctx, `
+	_, err := tx.Exec(ctx, `
 INSERT INTO bottle_kids (bottle_id, kid, pubkey, created_at)
 SELECT $1, k.kid, k.pub, $4
 FROM unnest($2::text[], $3::text[]) AS k(kid, pub)

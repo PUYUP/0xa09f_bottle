@@ -15,7 +15,7 @@ import {
   wrapSessionKey,
 } from "./crypto";
 import { idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
-import { claimUsername, computeKidProof, deriveUserId, getIdentity, getIdentityRecord, getServerPub, resetIdentityCache } from "./identity";
+import { claimUsername, deriveUserId, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
   Bottle,
@@ -458,30 +458,65 @@ async function privateJwkForKid(kid: string): Promise<JWK | null> {
   return rec?.privateJwk ?? null;
 }
 
-let popCache: { kidsKey: string; token: string; exp: number } | null = null;
+let popCache: { kidsKey: string; token: string; exp: number; verified: Set<string> } | null = null;
+const sharedBitsCache = new Map<string, ArrayBuffer>();
 
 async function popTokenFor(kids: string[]): Promise<string | null> {
   if (!kids.length) return null;
   const kidsKey = [...kids].sort().join(",");
-  if (popCache && popCache.kidsKey === kidsKey && popCache.exp > Date.now()) {
+  // Reuse the cached token only while it still covers every kid we care
+  // about. Kids the server could not verify yet (e.g. a reply key whose
+  // first bottle just landed, or a legacy key missing from the registry)
+  // force a fresh proof round so their bottles aren't invisible for the
+  // whole token lifetime.
+  if (
+    popCache &&
+    popCache.kidsKey === kidsKey &&
+    popCache.exp > Date.now() &&
+    kids.every((k) => popCache!.verified.has(k))
+  ) {
     return popCache.token;
   }
   const serverPub = await getServerPub();
   const proofs: Record<string, { ts: number; proof: string }> = {};
+  // The ECDH shared secret per kid is time-invariant — cache it so repeat
+  // proof rounds only recompute the cheap SHA-256 digest, not key agreement.
   await Promise.all(
     kids.map(async (kid) => {
       const priv = await privateJwkForKid(kid);
       if (!priv) return;
-      const proof = await computeKidProof(priv, serverPub, kid).catch(() => null);
-      if (proof) proofs[kid] = proof;
+      try {
+        let shared = sharedBitsCache.get(kid);
+        if (!shared) {
+          const privKey = await crypto.subtle.importKey(
+            "jwk",
+            priv,
+            { name: "ECDH", namedCurve: "P-256" },
+            false,
+            ["deriveBits"]
+          );
+          shared = await crypto.subtle.deriveBits({ name: "ECDH", public: serverPub }, privKey, 256);
+          sharedBitsCache.set(kid, shared);
+        }
+        const ts = Math.floor(Date.now() / 1000);
+        proofs[kid] = { ts, proof: await kidProofDigest(shared, kid, ts) };
+      } catch {
+        // unprovable kid — server will simply not verify it
+      }
     })
   );
-  const { token, expiresIn } = await api<{ token?: string; expiresIn?: number }>(
-    "/api/auth/pop-token",
-    { method: "POST", body: JSON.stringify({ kids, proofs }) }
-  );
+  const { token, kids: verifiedKids, expiresIn } = await api<{
+    token?: string;
+    kids?: string[];
+    expiresIn?: number;
+  }>("/api/auth/pop-token", { method: "POST", body: JSON.stringify({ kids, proofs }) });
   if (!token) return null;
-  popCache = { kidsKey, token, exp: Date.now() + ((expiresIn || 600) - 60) * 1000 };
+  popCache = {
+    kidsKey,
+    token,
+    exp: Date.now() + ((expiresIn || 600) - 60) * 1000,
+    verified: new Set(verifiedKids || []),
+  };
   return token;
 }
 

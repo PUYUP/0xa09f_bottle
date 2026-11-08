@@ -107,8 +107,29 @@ export async function computeProof(
   return { ts, nonce, proof: bytesToB64(new Uint8Array(digest)) };
 }
 
+// kidProofDigest hashes a precomputed ECDH shared secret into the PoP proof
+// payload. The shared secret is time-invariant per (kid, server) pair, so
+// callers may cache it and only recompute this cheap hash per request.
+export async function kidProofDigest(
+  shared: ArrayBuffer,
+  kid: string,
+  ts: number
+): Promise<string> {
+  const kidBytes = new TextEncoder().encode(kid);
+  const tagBytes = new TextEncoder().encode("a09f-pop-v1");
+  const tsBytes = new TextEncoder().encode(String(ts));
+  const sharedBytes = new Uint8Array(shared);
+  const buf = new Uint8Array(sharedBytes.length + tagBytes.length + kidBytes.length + tsBytes.length);
+  buf.set(sharedBytes, 0);
+  buf.set(tagBytes, sharedBytes.length);
+  buf.set(kidBytes, sharedBytes.length + tagBytes.length);
+  buf.set(tsBytes, sharedBytes.length + tagBytes.length + kidBytes.length);
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  return bytesToB64(new Uint8Array(digest));
+}
+
 // computeKidProof produces the proof-of-possession digest for an envelope
-// kid: base64(SHA-256(ecdhShared || "a09f-pop-v1" || kid || ts)) where
+// kid: {ts, base64(SHA-256(ecdhShared || "a09f-pop-v1" || kid || ts))} where
 // ecdhShared = ECDH(kidPrivateKey, serverPub). Must match keyauth.PoPHash.
 export async function computeKidProof(
   privateJwk: JWK,
@@ -124,17 +145,7 @@ export async function computeKidProof(
   );
   const bits = await crypto.subtle.deriveBits({ name: "ECDH", public: serverPub }, priv, 256);
   const ts = Math.floor(Date.now() / 1000);
-  const kidBytes = new TextEncoder().encode(kid);
-  const tagBytes = new TextEncoder().encode("a09f-pop-v1");
-  const tsBytes = new TextEncoder().encode(String(ts));
-  const shared = new Uint8Array(bits);
-  const buf = new Uint8Array(shared.length + tagBytes.length + kidBytes.length + tsBytes.length);
-  buf.set(shared, 0);
-  buf.set(tagBytes, shared.length);
-  buf.set(kidBytes, shared.length + tagBytes.length);
-  buf.set(tsBytes, shared.length + tagBytes.length + kidBytes.length);
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  return { ts, proof: bytesToB64(new Uint8Array(digest)) };
+  return { ts, proof: await kidProofDigest(bits, kid, ts) };
 }
 
 export async function authHeaders(): Promise<Record<string, string> | null> {
