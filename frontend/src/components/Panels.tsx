@@ -5,6 +5,7 @@ import {
   blockOrReportUser,
   claimUsernameUI,
   exportVault,
+  fetchMyStats,
   formatExpiry,
   formatTTL,
   importVaultFile,
@@ -13,6 +14,7 @@ import {
   refreshPoolKeys,
   unblockUser,
 } from "../lib/store";
+import type { UserStats } from "../lib/store";
 import { useApp } from "../hooks/useApp";
 import type { KeyRecord } from "../lib/types";
 
@@ -152,9 +154,15 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
   const { blocks } = useApp();
   const [username, setUsername] = useState("");
   const [target, setTarget] = useState("");
+  const [stats, setStats] = useState<UserStats | null>(null);
+  const [statsLoaded, setStatsLoaded] = useState(false);
   const identity = useAppIdentity();
 
   if (blocks === null) refreshBlocks().catch(() => {});
+  if (identity?.username && !statsLoaded) {
+    setStatsLoaded(true);
+    fetchMyStats().then(setStats).catch(() => {});
+  }
 
   return (
     <Panel title="👤 account" onClose={onClose}>
@@ -186,6 +194,31 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
             claim
           </button>
         </div>
+        {identity?.username && stats && (
+          <div>
+            <p className="mb-1 text-[13px] text-neutral-600">your numbers (server-side):</p>
+            <table className="w-full text-[13px]">
+              <tbody>
+                <tr><td className="pr-3">casts</td><td><b>{stats.casts}</b></td></tr>
+                <tr><td className="pr-3">replies</td><td><b>{stats.replies}</b></td></tr>
+                <tr><td className="pr-3">bottles received</td><td><b>{stats.received}</b></td></tr>
+                <tr><td className="pr-3">delivery claims</td><td><b>{stats.claims}</b></td></tr>
+                <tr><td className="pr-3">keys deposited</td><td><b>{stats.keysDeposited}</b></td></tr>
+                <tr><td className="pr-3">users blocked</td><td><b>{stats.usersBlocked}</b></td></tr>
+                <tr><td className="pr-3">reports filed</td><td><b>{stats.reportsFiled}</b></td></tr>
+                <tr><td className="pr-3">times reported</td><td><b>{stats.timesReported}</b></td></tr>
+                <tr>
+                  <td className="pr-3">member since</td>
+                  <td>{stats.memberSince ? new Date(stats.memberSince * 1000).toLocaleDateString() : "—"}</td>
+                </tr>
+                <tr>
+                  <td className="pr-3">last activity</td>
+                  <td>{stats.lastActivity ? new Date(stats.lastActivity * 1000).toLocaleString() : "—"}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
         {identity?.username && (
           <>
             <div className="flex gap-2">

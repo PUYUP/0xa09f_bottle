@@ -814,6 +814,29 @@ export async function refreshBlocks() {
   setState({ blocks });
 }
 
+export interface UserStats {
+  memberSince: number;
+  casts: number;
+  replies: number;
+  received: number;
+  claims: number;
+  keysDeposited: number;
+  firstActivity: number;
+  lastActivity: number;
+  reportsFiled: number;
+  timesReported: number;
+  usersBlocked: number;
+}
+
+export async function fetchMyStats(): Promise<UserStats | null> {
+  try {
+    const { stats } = await api<{ stats?: UserStats }>("/api/me/stats");
+    return stats || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function unblockUser(blockedUserId: string) {
   await api(`/api/users/${encodeURIComponent(blockedUserId)}/block`, { method: "DELETE" });
   log(`unblocked ${blockedUserId.slice(0, 12)}…`);
