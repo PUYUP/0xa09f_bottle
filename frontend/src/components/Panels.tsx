@@ -209,8 +209,8 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         {meta && (
-          <div>
-            <p className="mb-1 text-[13px] text-neutral-600">your device &amp; network:</p>
+          <div className="msg bevel-in">
+            <p className="mb-1 text-[13px] font-bold text-neutral-700">🖥 your device &amp; network</p>
             <table className="w-full text-[13px]">
               <tbody>
                 <tr><td className="pr-3">ip (as seen by relay)</td><td className="font-mono">{meta.ip || "…"}</td></tr>
@@ -232,13 +232,16 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
           </div>
         )}
         {identity?.username && statsLoaded && !stats && (
-          <p className="text-[13px] text-neutral-600">
-            stats unavailable — backend may be outdated
-          </p>
+          <div className="msg bevel-in">
+            <p className="mb-1 text-[13px] font-bold text-neutral-700">📊 your numbers (server-side)</p>
+            <p className="text-[13px] text-neutral-600">
+              stats unavailable — backend may be outdated
+            </p>
+          </div>
         )}
         {identity?.username && stats && (
-          <div>
-            <p className="mb-1 text-[13px] text-neutral-600">your numbers (server-side):</p>
+          <div className="msg bevel-in">
+            <p className="mb-1 text-[13px] font-bold text-neutral-700">📊 your numbers (server-side)</p>
             <table className="w-full text-[13px]">
               <tbody>
                 <tr><td className="pr-3">casts</td><td><b>{stats.casts}</b></td></tr>
