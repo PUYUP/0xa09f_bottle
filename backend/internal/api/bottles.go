@@ -45,6 +45,19 @@ func (s *Server) createBottle(c fiber.Ctx) error {
 				"blocked": len(blocked),
 			})
 		}
+		// Reply-path enforcement: reply/self envelope kids are not pool keys
+		// in user_keys, so BlockedKidsAmong cannot see them. Resolve the
+		// parent bottle's author via its self:<uid> marker and reject when
+		// a block exists in either direction.
+		if bottle.ParentID != "" && s.pg != nil {
+			if blocked, err := s.threadBlocked(c.Context(), user.ID, bottle.ParentID); err != nil {
+				log.Printf("thread block check %s: %v", bottle.ParentID, err)
+			} else if blocked {
+				return c.Status(fiber.StatusConflict).JSON(fiber.Map{
+					"error": "blocked_thread",
+				})
+			}
+		}
 	}
 	if err := s.store.CreateBottle(c.Context(), bottle); err != nil {
 		if err == store.ErrBottleExists {
@@ -493,6 +506,40 @@ func sortBottles(b []store.Bottle) {
 		}
 		return b[i].ID > b[j].ID
 	})
+}
+
+// threadBlocked resolves a reply's parent bottle to its author's user id —
+// every bottle carries a self:<uid> envelope marker — and reports whether a
+// block exists between the replier and that author in either direction.
+// Missing parents fail open: the check is best-effort on top of the
+// anonymous-by-design cast path.
+func (s *Server) threadBlocked(ctx context.Context, userID, parentID string) (bool, error) {
+	parent, err := s.store.GetBottle(ctx, parentID)
+	if err != nil && s.pg != nil {
+		parent, err = s.pg.GetBottle(ctx, parentID)
+	}
+	if err != nil {
+		return false, err
+	}
+	var authorUID string
+	for _, env := range parent.Envelopes {
+		if strings.HasPrefix(env.KID, "self:") {
+			authorUID = strings.TrimPrefix(env.KID, "self:")
+			break
+		}
+	}
+	if authorUID == "" || authorUID == userID {
+		return false, nil
+	}
+	iBlocked, err := s.pg.BlockExists(ctx, userID, authorUID)
+	if err != nil {
+		return false, err
+	}
+	theyBlocked, err := s.pg.BlockExists(ctx, authorUID, userID)
+	if err != nil {
+		return false, err
+	}
+	return iBlocked || theyBlocked, nil
 }
 
 type reportBottleRequest struct {

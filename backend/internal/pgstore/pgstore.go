@@ -649,6 +649,26 @@ LIMIT $2`, parentID, limit)
 	return bottles, rows.Err()
 }
 
+// GetBottle returns one archived bottle by id (envelopes included), used to
+// resolve thread parents that have already expired from Redis.
+func (p *PGStore) GetBottle(ctx context.Context, id string) (store.Bottle, error) {
+	var b store.Bottle
+	var envelopes, kids []byte
+	err := p.pool.QueryRow(ctx, `
+SELECT id, created_at, depth, parent_id, root_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
+FROM bottles WHERE id = $1`, id).
+		Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.RootID, &b.MaxDeliveries,
+			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &kids)
+	if err != nil {
+		return store.Bottle{}, err
+	}
+	if err := json.Unmarshal(envelopes, &b.Envelopes); err != nil {
+		return store.Bottle{}, err
+	}
+	_ = json.Unmarshal(kids, &b.DeliveredKids)
+	return b, nil
+}
+
 // ListBottlesByKids returns bottles carrying at least one of the given
 // envelope kids, newest-first with the same composite cursor semantics as
 // ListBottlesCursor. Served by the bottle_kids index, so it stays fast and

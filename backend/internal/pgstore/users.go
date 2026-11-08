@@ -95,6 +95,15 @@ func (p *PGStore) BlockUser(ctx context.Context, userID, blockedUserID, reason s
 	return err
 }
 
+// BlockExists reports whether userID has blocked blockedUserID.
+func (p *PGStore) BlockExists(ctx context.Context, userID, blockedUserID string) (bool, error) {
+	var exists bool
+	err := p.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM blocked_users WHERE user_id = $1 AND blocked_user_id = $2)`,
+		userID, blockedUserID).Scan(&exists)
+	return exists, err
+}
+
 func (p *PGStore) UnblockUser(ctx context.Context, userID, blockedUserID string) error {
 	ct, err := p.pool.Exec(ctx,
 		`DELETE FROM blocked_users WHERE user_id = $1 AND blocked_user_id = $2`,

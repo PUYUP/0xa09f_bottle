@@ -549,20 +549,29 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
   // or use the parent's own id when replying to a root (or a legacy reply
   // that predates the field).
   const rootId = bottle.rootId || bottle.id;
-  await api("/api/bottles", {
-    method: "POST",
-    body: JSON.stringify({
-      id: bottleId,
-      createdAt: Math.floor(Date.now() / 1000),
-      depth,
-      parentId: bottle.id,
-      rootId,
-      maxDeliveries: 1,
-      payloadIv: bytesToB64(payloadIV),
-      ciphertext: bytesToB64(new Uint8Array(ciphertext)),
-      envelopes: [env, selfEnv],
-    }),
-  });
+  try {
+    await api("/api/bottles", {
+      method: "POST",
+      body: JSON.stringify({
+        id: bottleId,
+        createdAt: Math.floor(Date.now() / 1000),
+        depth,
+        parentId: bottle.id,
+        rootId,
+        maxDeliveries: 1,
+        payloadIv: bytesToB64(payloadIV),
+        ciphertext: bytesToB64(new Uint8Array(ciphertext)),
+        envelopes: [env, selfEnv],
+      }),
+    });
+  } catch (e) {
+    const err = (e as { data?: { error?: string } }).data?.error;
+    if (err === "blocked_thread") {
+      log("reply blocked — a block exists between you and this user", "warn");
+      return;
+    }
+    throw e;
+  }
   await storeSentRecord(bottleId, {
     id: bottleId,
     createdAt: Math.floor(Date.now() / 1000),
