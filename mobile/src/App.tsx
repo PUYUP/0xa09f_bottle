@@ -65,6 +65,7 @@ export default function App() {
   const [identity, setIdentity] = useState<IdentityRecord | null>(null);
   const [claimName, setClaimName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const gateFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     init().catch((e) => log(`boot: ${(e as Error).message}`, "err"));
@@ -175,6 +176,39 @@ export default function App() {
             >
               claim &amp; enter
             </IonButton>
+            <div className="ion-margin-top" style={{ borderTop: "1px solid var(--ion-color-light)", paddingTop: 12 }}>
+              <p style={{ color: "var(--ion-color-medium)", fontSize: 13 }}>
+                coming back on a new device? your vault export holds the
+                private keys that prove this identity — import it to restore
+                your username, bait and message history.
+              </p>
+              <IonButton
+                expand="block"
+                fill="outline"
+                size="small"
+                onClick={() => gateFileRef.current?.click()}
+              >
+                <IonIcon icon={cloudDownload} slot="start" />
+                import vault / secret file
+              </IonButton>
+              <input
+                ref={gateFileRef}
+                type="file"
+                accept="application/json"
+                style={{ display: "none" }}
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!f) return;
+                  try {
+                    await importVaultFile(f);
+                    setIdentity(await getIdentity());
+                  } catch (err) {
+                    log(`import: ${(err as Error).message}`, "err");
+                  }
+                }}
+              />
+            </div>
           </div>
         </IonContent>
       </IonApp>

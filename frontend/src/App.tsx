@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "./hooks/useApp";
 import { AccountPanel, DeviceCard, MyKeysPanel, PoolPanel, StatsCard, VaultButtons } from "./components/Panels";
 import { ThreadList, countReplies, findNode } from "./components/Thread";
@@ -15,6 +15,7 @@ import {
   log,
   openThread,
   readTTLSeconds,
+  importVaultFile,
 } from "./lib/store";
 import { getIdentity, randomUsername as genName } from "./lib/identity";
 import { claimUsernameUI } from "./lib/store";
@@ -27,6 +28,8 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
   const [name, setName] = useState(() => genName());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [notice, setNotice] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
   const claim = () => {
     const v = name.trim();
     if (!v || busy) return;
@@ -70,9 +73,49 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
             </button>
           </div>
           {err && <div className="text-[13px] text-red-700">{err}</div>}
+          {notice && <div className="text-[13px] text-neutral-700">{notice}</div>}
           <button className="retro-btn w-full" disabled={busy || !name.trim()} onClick={claim}>
             {busy ? "claiming…" : "claim & enter"}
           </button>
+          <div className="border-t border-neutral-300 pt-2 text-[13px] text-neutral-600">
+            <p className="mb-1">
+              coming back on a new device? your vault export holds the private
+              keys that prove this identity — import it to restore your
+              username, bait and message history.
+            </p>
+            <button
+              className="retro-link"
+              onClick={() => fileRef.current?.click()}
+            >
+              📂 import vault / secret file
+            </button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file) return;
+                setErr("");
+                setNotice("");
+                try {
+                  await importVaultFile(file);
+                  const id = await getIdentity();
+                  if (id.username) {
+                    onClaimed();
+                  } else {
+                    setNotice(
+                      "vault imported — your keys are restored. claim any name below; the server will return your original username."
+                    );
+                  }
+                } catch (ex) {
+                  setErr(`import failed: ${(ex as Error).message}`);
+                }
+              }}
+            />
+          </div>
         </div>
       </div>
     </main>

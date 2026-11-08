@@ -1278,6 +1278,7 @@ export async function vaultKeysPayload() {
   // keys needed to unlock it. publicJwk is omitted (derivable from the
   // private JWK's x/y); deterministic reply keys need no storage at all.
   const identity = meta.find((m) => m?.id === "identity");
+  const idMeta = identity as unknown as { username?: string; userId?: string } | undefined;
   const replies = meta.filter(
     (m) => typeof m?.id === "string" && m.id.startsWith(REPLY_PREFIX) && m.privateJwk
   );
@@ -1285,6 +1286,11 @@ export async function vaultKeysPayload() {
     version: 4,
     keys: keys.map((k) => ({ kid: k.kid, jwk: k.privateJwk })),
     identity: identity?.privateJwk || null,
+    // username/userId ride along so an import restores the full profile —
+    // without them the gate would force a re-claim (which the server
+    // resolves to the canonical name anyway, but only after a round-trip).
+    identityMeta:
+      idMeta?.username ? { username: idMeta.username, userId: idMeta.userId } : null,
     replies: replies.map((m) => ({ id: m.id, jwk: m.privateJwk })),
   };
 }
@@ -1373,6 +1379,7 @@ export async function importVaultFile(file: File) {
     version?: number;
     keys?: { kid?: string; jwk?: JWK; privateJwk?: JWK; publicJwk?: JWK; createdAt?: number; depositedAt?: number | null; expiresAt?: number | null; status?: string }[];
     identity?: JWK | null;
+    identityMeta?: { username?: string; userId?: string } | null;
     replies?: { id?: string; jwk?: JWK }[];
     meta?: ThreadRecord[];
   };
@@ -1412,6 +1419,8 @@ export async function importVaultFile(file: File) {
         id: "identity",
         privateJwk: payload.identity,
         publicJwk: publicFromPrivate(payload.identity),
+        username: payload.identityMeta?.username,
+        userId: payload.identityMeta?.userId,
       });
       restored++;
     }
@@ -1455,6 +1464,7 @@ export async function importVaultFile(file: File) {
   await hydrateKeyMetadata();
   await renderInbox();
   log(`imported vault with ${restored} key(s) restored`);
+  return restored;
 }
 
 // ---------- panels ----------
