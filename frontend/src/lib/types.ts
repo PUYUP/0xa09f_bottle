@@ -47,6 +47,8 @@ export interface Bottle {
   status?: string;
   childCount?: number;
   lastChildAt?: number;
+  threadCount?: number;
+  threadLastAt?: number;
 }
 
 export interface Plain {
@@ -71,6 +73,8 @@ export interface ThreadRecord {
   caughtAt?: number;
   childCount?: number;
   lastChildAt?: number;
+  threadCount?: number;
+  threadLastAt?: number;
   repliesSeenAt?: number;
   readAt?: number;
   privateJwk?: JWK;

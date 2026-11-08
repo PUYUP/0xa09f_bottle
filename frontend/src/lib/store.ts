@@ -590,13 +590,36 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
 // (childCount/lastChildAt) onto local records so the inbox can badge and
 // sort threads by reply activity without fetching children eagerly.
 async function applyBottleStats(bottle: Bottle) {
-  if (!bottle.lastChildAt && !bottle.childCount) return;
-  for (const prefix of ["caught:", "sent:"]) {
-    const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottle.id}`).catch(() => null);
-    if (!rec) continue;
-    if (bottle.childCount != null) rec.childCount = bottle.childCount;
-    if (bottle.lastChildAt) rec.lastChildAt = bottle.lastChildAt;
-    await idbPut(META_STORE, rec).catch(() => {});
+  const hasChild = bottle.lastChildAt || bottle.childCount;
+  const hasThread = bottle.threadLastAt || bottle.threadCount;
+  if (!hasChild && !hasThread) return;
+  // Direct-child stats belong to this bottle's own record; thread aggregates
+  // belong to the thread ROOT's record (rootId, or the bottle itself when
+  // it's a root) so inbox badges reflect activity at any depth.
+  const targets: { id: string; child: boolean; thread: boolean }[] = [];
+  if (hasChild) targets.push({ id: bottle.id, child: true, thread: false });
+  if (hasThread) {
+    const rootId = bottle.rootId || bottle.id;
+    if (targets.some((t) => t.id === rootId)) {
+      targets.find((t) => t.id === rootId)!.thread = true;
+    } else {
+      targets.push({ id: rootId, child: false, thread: true });
+    }
+  }
+  for (const t of targets) {
+    for (const prefix of ["caught:", "sent:"]) {
+      const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${t.id}`).catch(() => null);
+      if (!rec) continue;
+      if (t.child) {
+        if (bottle.childCount != null) rec.childCount = bottle.childCount;
+        if (bottle.lastChildAt) rec.lastChildAt = bottle.lastChildAt;
+      }
+      if (t.thread) {
+        if (bottle.threadCount != null) rec.threadCount = bottle.threadCount;
+        if (bottle.threadLastAt) rec.threadLastAt = bottle.threadLastAt;
+      }
+      await idbPut(META_STORE, rec).catch(() => {});
+    }
   }
 }
 
@@ -704,14 +727,32 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
     if (b.createdAt && b.createdAt > maxChildAt) maxChildAt = b.createdAt;
     if (await processBottle(b, byKid)) n++;
   }
-  // Fresh replies should re-rank the parent immediately — bump lastChildAt
-  // from observed children instead of waiting for the next listing scan.
+  // Fresh replies should re-rank the thread immediately — bump activity
+  // timestamps from observed children instead of waiting for the next
+  // listing scan. threadLastAt drives root ordering; lastChildAt keeps
+  // direct-child lazy loading honest.
   if (maxChildAt > 0) {
     for (const prefix of ["caught:", "sent:"]) {
       const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${parentId}`).catch(() => null);
-      if (rec && (rec.lastChildAt || 0) < maxChildAt) {
-        rec.lastChildAt = maxChildAt;
-        await idbPut(META_STORE, rec).catch(() => {});
+      if (rec) {
+        let dirty = false;
+        if ((rec.lastChildAt || 0) < maxChildAt) {
+          rec.lastChildAt = maxChildAt;
+          dirty = true;
+        }
+        if ((rec.threadLastAt || 0) < maxChildAt) {
+          rec.threadLastAt = maxChildAt;
+          dirty = true;
+        }
+        if (dirty) await idbPut(META_STORE, rec).catch(() => {});
+      }
+      const rootId = rec?.bottle?.rootId || parentId;
+      if (rootId !== parentId) {
+        const rootRec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${rootId}`).catch(() => null);
+        if (rootRec && (rootRec.threadLastAt || 0) < maxChildAt) {
+          rootRec.threadLastAt = maxChildAt;
+          await idbPut(META_STORE, rootRec).catch(() => {});
+        }
       }
     }
   }
@@ -724,12 +765,21 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
 export async function openThread(bottleId: string) {
   await fetchThreadChildren(bottleId).catch(() => {});
   const seen = Date.now();
+  // Mark both the opened bottle and its thread root as seen — the unread
+  // badge lives on the root record's threadLastAt.
+  const ids = new Set([bottleId]);
   for (const prefix of ["caught:", "sent:"]) {
     const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottleId}`).catch(() => null);
-    if (rec) {
-      rec.repliesSeenAt = seen;
-      rec.readAt = seen;
-      await idbPut(META_STORE, rec).catch(() => {});
+    if (rec?.bottle?.rootId) ids.add(rec.bottle.rootId);
+  }
+  for (const id of ids) {
+    for (const prefix of ["caught:", "sent:"]) {
+      const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${id}`).catch(() => null);
+      if (rec) {
+        rec.repliesSeenAt = seen;
+        rec.readAt = seen;
+        await idbPut(META_STORE, rec).catch(() => {});
+      }
     }
   }
   await renderInbox();
@@ -832,7 +882,9 @@ export interface ThreadBundle {
 // so threads with fresh replies float to the top like a messaging inbox.
 // bottle.createdAt and lastChildAt share the server's unix-second unit.
 function recOrderKey(r: ThreadRecord): number {
-  return Math.max(r.bottle?.createdAt || 0, r.lastChildAt || 0);
+  // threadLastAt covers reply activity at any depth; lastChildAt is the
+  // direct-children fallback for records predating thread stats.
+  return Math.max(r.bottle?.createdAt || 0, r.threadLastAt || r.lastChildAt || 0);
 }
 
 export async function buildThreads(): Promise<ThreadBundle> {

@@ -373,16 +373,16 @@ export default function App() {
             const replies = countReplies(r);
             const isSent = r.rec.claim?.status === "SENT";
             const bottleId = r.rec.bottle?.id || "";
-            // Badge: server-reported reply activity newer than what we've
-            // opened, on bottles we authored (sent: records carry the reply
-            // key that decrypts responses).
+            // Badge: thread-level reply activity (any depth, via rootId)
+            // newer than what we've opened, on bottles we authored.
             const authored = state.records.some(
               (m) => m.id === `sent:${bottleId}`
             );
+            const lastActivity = r.rec.threadLastAt || r.rec.lastChildAt || 0;
             const hasNewReplies =
               authored &&
-              (r.rec.lastChildAt || 0) > 0 &&
-              (r.rec.lastChildAt || 0) * 1000 > (r.rec.repliesSeenAt || 0);
+              lastActivity > 0 &&
+              lastActivity * 1000 > (r.rec.repliesSeenAt || 0);
             return (
               <div
                 key={r.rec.id}

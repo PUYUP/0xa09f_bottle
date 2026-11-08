@@ -567,6 +567,39 @@ GROUP BY parent_id`, ids)
 	return out, rows.Err()
 }
 
+// ThreadStats returns per-thread reply aggregates keyed by the thread's root
+// bottle id: total descendant replies and the newest one's created_at.
+// Replies group by root_id; legacy replies without root_id fall back to
+// their direct parent so old threads still aggregate one level deep.
+func (p *PGStore) ThreadStats(ctx context.Context, rootIDs []string) (map[string][2]int64, error) {
+	out := make(map[string][2]int64, len(rootIDs))
+	if len(rootIDs) == 0 {
+		return out, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+SELECT tk, COUNT(*)::bigint, COALESCE(MAX(created_at), 0)
+FROM (
+  SELECT COALESCE(NULLIF(root_id, ''), parent_id) AS tk, created_at
+  FROM bottles
+  WHERE parent_id <> ''
+) t
+WHERE tk = ANY($1::text[])
+GROUP BY tk`, rootIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var root string
+		var count, last int64
+		if err := rows.Scan(&root, &count, &last); err != nil {
+			return nil, err
+		}
+		out[root] = [2]int64{count, last}
+	}
+	return out, rows.Err()
+}
+
 func (p *PGStore) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error) {
 	if limit <= 0 {
 		limit = 50

@@ -76,6 +76,11 @@ type Bottle struct {
 	// reply activity without fetching every thread's children.
 	ChildCount  int   `json:"childCount,omitempty"`
 	LastChildAt int64 `json:"lastChildAt,omitempty"`
+	// ThreadCount/ThreadLastAt aggregate the whole thread (all descendants
+	// sharing the root id) so inbox roots can badge and re-rank on reply
+	// activity at any depth, not just direct children.
+	ThreadCount  int   `json:"threadCount,omitempty"`
+	ThreadLastAt int64 `json:"threadLastAt,omitempty"`
 }
 
 type PickupResult struct {

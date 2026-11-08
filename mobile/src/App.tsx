@@ -268,10 +268,11 @@ export default function App() {
               !isSent &&
               !sentIds.has(bottle?.id || "");
             const authored = sentIds.has(bottle?.id || "");
+            const lastActivity = node.rec.threadLastAt || node.rec.lastChildAt || 0;
             const hasNewReplies =
               authored &&
-              (node.rec.lastChildAt || 0) > 0 &&
-              (node.rec.lastChildAt || 0) * 1000 > (node.rec.repliesSeenAt || 0);
+              lastActivity > 0 &&
+              lastActivity * 1000 > (node.rec.repliesSeenAt || 0);
             return (
               <IonItem
                 key={node.rec.id}

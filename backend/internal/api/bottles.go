@@ -409,6 +409,35 @@ func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64
 					}
 				}
 			}
+			// Thread-level aggregates keyed by root id: a reply at any depth
+			// bumps the root's activity so inbox badges/ordering reflect the
+			// whole conversation, not just direct children.
+			threadKeys := make(map[string]struct{}, len(bottles))
+			for _, b := range bottles {
+				key := b.RootID
+				if key == "" {
+					key = b.ID
+				}
+				threadKeys[key] = struct{}{}
+			}
+			keyList := make([]string, 0, len(threadKeys))
+			for k := range threadKeys {
+				keyList = append(keyList, k)
+			}
+			if tstats, err := s.pg.ThreadStats(c.Context(), keyList); err != nil {
+				log.Printf("pg thread stats: %v", err)
+			} else {
+				for i := range bottles {
+					key := bottles[i].RootID
+					if key == "" {
+						key = bottles[i].ID
+					}
+					if st, ok := tstats[key]; ok {
+						bottles[i].ThreadCount = int(st[0])
+						bottles[i].ThreadLastAt = st[1]
+					}
+				}
+			}
 			nextCursor := ""
 			if len(bottles) > 0 {
 				last := bottles[len(bottles)-1]
