@@ -15,6 +15,9 @@ export interface KeyRecord {
   expiresAt?: number | null;
   // last synced bait status: "pending" | "active" | "eaten" | "expired" | "lost"
   status?: string;
+  // local UI dismissal: set when the user taps an eaten bait to clear it
+  // from the bait line. Never leaves the device (not in vault exports).
+  dismissedAt?: number | null;
 }
 
 export interface IdentityRecord {

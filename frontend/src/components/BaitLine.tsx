@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "../hooks/useApp";
-import { baitStatus } from "../lib/store";
+import { baitStatus, dismissEatenBait } from "../lib/store";
 import type { KeyRecord } from "../lib/types";
 
 const STATUS_META: Record<string, { emoji: string; label: string; cls: string }> = {
@@ -14,8 +14,8 @@ const STATUS_META: Record<string, { emoji: string; label: string; cls: string }>
 // BaitLine renders the user's deposited keys as a row of lures. Each record
 // carries a persisted `status` (synced from the pool on every refresh); a
 // key still in the pool bobs gently, a freshly consumed one plays an "eaten"
-// animation, and an unread catch addressed to a key shows a pulsing dot
-// until the message is opened.
+// animation, and tapping an eaten bait marks its catch read and clears the
+// slot from the line.
 export function BaitLine() {
   const { keys, ownPoolKids, records } = useApp();
   const [eaten, setEaten] = useState<Map<string, number>>(new Map());
@@ -56,33 +56,63 @@ export function BaitLine() {
       .map((r) => r.kid as string)
   );
 
+  const statusOf = (k: KeyRecord) =>
+    eaten.has(k.kid) && !ownPoolKids.has(k.kid)
+      ? "eaten"
+      : k.status || baitStatus(k, ownPoolKids.has(k.kid));
+
   const slot = (k: KeyRecord) => {
-    // persisted status wins; derive live when it's missing or the key just
-    // transitioned (eaten animation runs before the sync lands)
-    const status =
-      eaten.has(k.kid) && !ownPoolKids.has(k.kid)
-        ? "eaten"
-        : k.status || baitStatus(k, ownPoolKids.has(k.kid));
+    const status = statusOf(k);
     const meta = STATUS_META[status] ?? STATUS_META.pending;
     const anim =
       status === "active" ? "bait-bob" : eaten.has(k.kid) ? "bait-eaten" : "";
-    return (
-      <div key={k.kid} className={`bait-slot ${meta.cls}`} title={`${k.kid}\n${meta.label} · status: ${status}`}>
+    const dismissible = status === "eaten" || status === "lost";
+    const inner = (
+      <>
         {unreadKids.has(k.kid) && <span className="bait-unread-dot">!</span>}
         <span className={`bait-emoji ${anim}`}>{meta.emoji}</span>
         <span className="bait-kid">{k.kid.slice(0, 8)}…</span>
         <span className="bait-status">{meta.label}</span>
+      </>
+    );
+    const cls = `bait-slot ${meta.cls}${dismissible ? " dismissible" : ""}`;
+    const title = `${k.kid}\n${meta.label} · status: ${status}${
+      dismissible ? "\ntap to mark read & clear" : ""
+    }`;
+    if (dismissible) {
+      return (
+        <button
+          key={k.kid}
+          type="button"
+          className={cls}
+          title={title}
+          onClick={() => dismissEatenBait(k.kid).catch(() => {})}
+        >
+          {inner}
+        </button>
+      );
+    }
+    return (
+      <div key={k.kid} className={cls} title={title}>
+        {inner}
       </div>
     );
   };
 
-  if (!keys.length) return null;
+  // Dismissed baits stay hidden unless they somehow become fishable again.
+  const visible = keys.filter((k) => {
+    if (!k.dismissedAt) return true;
+    const s = statusOf(k);
+    return s === "active" || s === "pending";
+  });
+
+  if (!visible.length) return null;
   return (
     <div className="mb-2">
       <div className="text-[12px] italic text-neutral-600">
-        your bait line — 🎣 waiting · 😋 just eaten · 🍽️ used · 🫥 lost? · ❗ unread catch
+        your bait line — 🎣 waiting · 😋 just eaten · 🫥 lost? · ❗ unread catch · tap 😋 to clear
       </div>
-      <div className="bait-line bevel-in">{keys.map(slot)}</div>
+      <div className="bait-line bevel-in">{visible.map(slot)}</div>
     </div>
   );
 }

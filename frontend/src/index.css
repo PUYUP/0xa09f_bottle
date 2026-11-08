@@ -301,3 +301,14 @@ hr.retro-hr {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.bait-slot.dismissible {
+  cursor: pointer;
+}
+.bait-slot.dismissible:hover {
+  background: #f0e0c8;
+  border-color: #c0392b;
+}
+button.bait-slot {
+  font: inherit;
+  appearance: none;
+}

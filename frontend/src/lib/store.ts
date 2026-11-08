@@ -465,6 +465,27 @@ async function storeSentRecord(
   }).catch(() => {});
 }
 
+// dismissEatenBait clears a consumed bait from the bait line: marks any
+// unread catches addressed to that kid as read, then stamps dismissedAt on
+// the key record so the slot stops rendering. Local-only state.
+export async function dismissEatenBait(kid: string) {
+  const now = Date.now();
+  const all = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
+  for (const r of all) {
+    if (typeof r.id === "string" && r.id.startsWith("caught:") && r.kid === kid && !r.readAt) {
+      r.readAt = now;
+      await idbPut(META_STORE, r).catch(() => {});
+    }
+  }
+  const k = state.keys.find((k) => k.kid === kid);
+  if (k && !k.dismissedAt) {
+    k.dismissedAt = now;
+    await idbPut(KEY_STORE, k).catch(() => {});
+    setState({ keys: [...state.keys] });
+  }
+  await renderInbox();
+}
+
 export async function reportBottle(bottleId: string) {
   const reason = window.prompt("report reason (optional)") || "";
   await api(`/api/bottles/${encodeURIComponent(bottleId)}/report`, {
