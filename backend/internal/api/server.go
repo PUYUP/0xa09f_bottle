@@ -83,6 +83,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	})
 
 	app.Get("/api/health", s.health)
+	app.Get("/api/ip", s.clientIP)
 	app.Get("/api/health/live", s.live)
 	app.Get("/api/health/ready", s.ready)
 	app.Post("/api/pool/deposit", depositLimiter, s.depositKeys)

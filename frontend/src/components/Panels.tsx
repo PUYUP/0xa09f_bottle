@@ -8,13 +8,14 @@ import {
   fetchMyStats,
   formatExpiry,
   formatTTL,
+  getClientMeta,
   importVaultFile,
   log,
   refreshBlocks,
   refreshPoolKeys,
   unblockUser,
 } from "../lib/store";
-import type { UserStats } from "../lib/store";
+import type { ClientMeta, UserStats } from "../lib/store";
 import { useApp } from "../hooks/useApp";
 import type { KeyRecord } from "../lib/types";
 
@@ -31,6 +32,15 @@ function Panel({ title, onClose, children }: { title: string; onClose: () => voi
 }
 
 const BAIT_PAGE = 50;
+
+function formatUTCOffset(minutes?: number): string {
+  if (minutes == null) return "?";
+  const sign = minutes >= 0 ? "+" : "-";
+  const abs = Math.abs(minutes);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  return `${sign}${h}${m ? `:${String(m).padStart(2, "0")}` : ""}`;
+}
 
 export function MyKeysPanel({ onClose }: { onClose: () => void }) {
   const { keys, ownPoolKids, activePoolKeys } = useApp();
@@ -156,9 +166,13 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
   const [target, setTarget] = useState("");
   const [stats, setStats] = useState<UserStats | null>(null);
   const [statsLoaded, setStatsLoaded] = useState(false);
+  const [meta, setMeta] = useState<ClientMeta | null>(null);
   const identity = useAppIdentity();
 
   if (blocks === null) refreshBlocks().catch(() => {});
+  if (!meta) {
+    getClientMeta().then(setMeta).catch(() => {});
+  }
   if (identity?.username && !statsLoaded) {
     setStatsLoaded(true);
     fetchMyStats().then(setStats).catch(() => {});
@@ -194,6 +208,29 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
             claim
           </button>
         </div>
+        {meta && (
+          <div>
+            <p className="mb-1 text-[13px] text-neutral-600">your device &amp; network:</p>
+            <table className="w-full text-[13px]">
+              <tbody>
+                <tr><td className="pr-3">ip (as seen by relay)</td><td className="font-mono">{meta.ip || "…"}</td></tr>
+                <tr><td className="pr-3">datetime</td><td>{meta.datetime}</td></tr>
+                <tr><td className="pr-3">timezone</td><td>{meta.timezone} (UTC{formatUTCOffset(meta.timezoneOffset)})</td></tr>
+                <tr><td className="pr-3">language</td><td>{meta.language}{meta.languages ? ` (${meta.languages})` : ""}</td></tr>
+                <tr><td className="pr-3">platform</td><td>{meta.platform || "—"}</td></tr>
+                <tr><td className="pr-3">screen</td><td>{meta.screen}</td></tr>
+                <tr><td className="pr-3">cpu cores</td><td>{meta.cores || "—"}</td></tr>
+                {meta.memoryGB ? <tr><td className="pr-3">memory</td><td>{meta.memoryGB} GB</td></tr> : null}
+                {meta.connection ? <tr><td className="pr-3">connection</td><td>{meta.connection}</td></tr> : null}
+                <tr><td className="pr-3">cookies</td><td>{meta.cookies ? "enabled" : "disabled"}</td></tr>
+                <tr><td className="pr-3">do not track</td><td>{meta.doNotTrack || "not set"}</td></tr>
+                <tr><td className="pr-3">touch</td><td>{meta.touch ? "yes" : "no"}</td></tr>
+                <tr><td className="pr-3">online</td><td>{meta.online ? "yes" : "no"}</td></tr>
+              </tbody>
+            </table>
+            <p className="mt-1 break-all font-mono text-[11px] text-neutral-500">{meta.userAgent}</p>
+          </div>
+        )}
         {identity?.username && statsLoaded && !stats && (
           <p className="text-[13px] text-neutral-600">
             stats unavailable — backend may be outdated

@@ -839,6 +839,55 @@ export async function fetchMyStats(): Promise<UserStats | null> {
   }
 }
 
+// ClientMeta is everything the browser itself can honestly report about
+// this device/session, plus the server-observed IP.
+export interface ClientMeta {
+  ip?: string;
+  userAgent?: string;
+  language?: string;
+  languages?: string;
+  platform?: string;
+  timezone?: string;
+  timezoneOffset?: number;
+  datetime?: string;
+  screen?: string;
+  cores?: number;
+  memoryGB?: number;
+  connection?: string;
+  cookies?: boolean;
+  doNotTrack?: string;
+  touch?: boolean;
+  online?: boolean;
+}
+
+export async function getClientMeta(): Promise<ClientMeta> {
+  const meta: ClientMeta = {
+    userAgent: navigator.userAgent,
+    language: navigator.language,
+    languages: navigator.languages?.join(", "),
+    platform: (navigator as { platform?: string }).platform || "",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
+    timezoneOffset: -new Date().getTimezoneOffset(),
+    datetime: new Date().toString(),
+    screen: `${screen.width}×${screen.height} @${screen.colorDepth}bit`,
+    cores: navigator.hardwareConcurrency || 0,
+    connection: (navigator as { connection?: { effectiveType?: string } }).connection?.effectiveType || "",
+    cookies: navigator.cookieEnabled,
+    doNotTrack: navigator.doNotTrack || "",
+    touch: "ontouchstart" in window || navigator.maxTouchPoints > 0,
+    online: navigator.onLine,
+  };
+  const mem = (navigator as { deviceMemory?: number }).deviceMemory;
+  if (mem) meta.memoryGB = mem;
+  try {
+    const { ip } = await api<{ ip?: string }>("/api/ip", { auth: false });
+    meta.ip = ip || "";
+  } catch {
+    meta.ip = "";
+  }
+  return meta;
+}
+
 export async function unblockUser(blockedUserId: string) {
   await api(`/api/users/${encodeURIComponent(blockedUserId)}/block`, { method: "DELETE" });
   log(`unblocked ${blockedUserId.slice(0, 12)}…`);
