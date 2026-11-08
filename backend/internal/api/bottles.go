@@ -232,6 +232,64 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"bottles": bottles, "nextCursor": nextCursor})
 }
 
+// listBottleChildren returns direct children of a bottle, merged from the
+// Redis active set and the Postgres archive, ordered oldest-first so clients
+// can render a thread level by level.
+func (s *Server) listBottleChildren(c fiber.Ctx) error {
+	parentID := c.Params("id")
+	if !validBottleID(parentID) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid bottle id")
+	}
+	limit := 200
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = n
+		}
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	seen := make(map[string]bool)
+	merged := make([]store.Bottle, 0, limit)
+	add := func(list []store.Bottle) {
+		for _, b := range list {
+			if b.ParentID != parentID || seen[b.ID] {
+				continue
+			}
+			seen[b.ID] = true
+			merged = append(merged, b)
+		}
+	}
+
+	redisChildren, err := s.store.ListChildren(c.Context(), parentID, limit)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+	}
+	add(redisChildren)
+	if s.pg != nil {
+		pgChildren, err := s.pg.ListChildren(c.Context(), parentID, limit)
+		if err != nil {
+			log.Printf("pg list children %s: %v", parentID, err)
+		} else {
+			add(pgChildren)
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].CreatedAt != merged[j].CreatedAt {
+			return merged[i].CreatedAt < merged[j].CreatedAt
+		}
+		return merged[i].ID < merged[j].ID
+	})
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return c.JSON(fiber.Map{"bottles": merged, "parentId": parentID})
+}
+
 func parseKidFilter(raw string) map[string]struct{} {
 	if raw == "" {
 		return nil

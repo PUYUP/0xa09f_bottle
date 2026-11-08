@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS bottles (
   delivered_kids  JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 CREATE INDEX IF NOT EXISTS bottles_created_at_idx ON bottles (created_at DESC);
+CREATE INDEX IF NOT EXISTS bottles_parent_id_idx ON bottles (parent_id) WHERE parent_id <> '';
 
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
@@ -191,6 +192,43 @@ SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, pay
 FROM bottles
 ORDER BY created_at DESC, id COLLATE "C" DESC
 LIMIT $1 OFFSET $2`, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bottles := make([]store.Bottle, 0, limit)
+	for rows.Next() {
+		var b store.Bottle
+		var envelopes, kids []byte
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.MaxDeliveries,
+			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &kids); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(envelopes, &b.Envelopes); err != nil {
+			continue
+		}
+		_ = json.Unmarshal(kids, &b.DeliveredKids)
+		bottles = append(bottles, b)
+	}
+	return bottles, rows.Err()
+}
+
+// ListChildren returns archive bottles whose parent_id matches, oldest first
+// so clients can rebuild a thread in chronological order.
+func (p *PGStore) ListChildren(ctx context.Context, parentID string, limit int) ([]store.Bottle, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	rows, err := p.pool.Query(ctx, `
+SELECT id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids
+FROM bottles
+WHERE parent_id = $1
+ORDER BY created_at ASC, id COLLATE "C" ASC
+LIMIT $2`, parentID, limit)
 	if err != nil {
 		return nil, err
 	}

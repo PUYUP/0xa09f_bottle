@@ -389,6 +389,16 @@ export async function reportBottle(bottleId: string) {
   log(`reported bottle ${bottleId.slice(0, 8)}`);
 }
 
+// fetchBottleChildren returns direct replies to a bottle, oldest-first,
+// merged from the server's active set and archive.
+export async function fetchBottleChildren(parentId: string, limit = 200): Promise<Bottle[]> {
+  const { bottles = [] } = await api<{ bottles?: Bottle[] }>(
+    `/api/bottles/${encodeURIComponent(parentId)}/children?limit=${limit}`,
+    { auth: false }
+  );
+  return bottles;
+}
+
 const caughtThisSession = new Set<string>();
 
 // catchKidsParam builds the comma-separated kid filter shared by the bottle

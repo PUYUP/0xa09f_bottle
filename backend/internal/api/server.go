@@ -92,6 +92,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Get("/api/pool/kids", s.listPoolKids)
 	app.Post("/api/bottles", bottleLimiter, s.createBottle)
 	app.Get("/api/bottles", s.listBottles)
+	app.Get("/api/bottles/:id/children", s.listBottleChildren)
 	app.Get("/api/events", s.streamEvents)
 	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
 	app.Post("/api/bottles/:id/report", bottleLimiter, s.reportBottle)

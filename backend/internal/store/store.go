@@ -101,6 +101,10 @@ func bottleRedisKey(id string) string {
 	return "a09f:bottle:" + id
 }
 
+func childrenRedisKey(parentID string) string {
+	return "a09f:bottle:children:" + parentID
+}
+
 // poolMember is the compact on-Redis representation of a PoolKey.
 // "p" holds the JWK x/y coordinates as "x.y" (base64url), avoiding
 // storing the verbose JWK JSON envelope inside every member.
@@ -550,12 +554,17 @@ local raw = ARGV[2]
 local ttlSeconds = tonumber(ARGV[3])
 local createdAt = tonumber(ARGV[4])
 local maxBottles = tonumber(ARGV[5])
+local parentId = ARGV[6] or ''
 
 local setRes = redis.call('SET', bottleKey, raw, 'NX', 'EX', ttlSeconds)
 if not setRes then
   return 'EXISTS'
 end
 redis.call('ZADD', activeKey, createdAt, bottleId)
+if parentId ~= '' then
+  redis.call('SADD', KEYS[3], bottleId)
+  redis.call('EXPIRE', KEYS[3], ttlSeconds)
+end
 if maxBottles > 0 then
   local card = redis.call('ZCARD', activeKey)
   if card > maxBottles then
@@ -582,8 +591,8 @@ func (s *Store) CreateBottle(ctx context.Context, bottle Bottle) error {
 	if ttlSec <= 0 {
 		ttlSec = 7 * 24 * 3600
 	}
-	res, err := createBottleScript.Run(ctx, s.rdb, []string{bottleRedisKey(bottle.ID), activeKey},
-		bottle.ID, string(raw), ttlSec, bottle.CreatedAt, s.maxBottles).Text()
+	res, err := createBottleScript.Run(ctx, s.rdb, []string{bottleRedisKey(bottle.ID), activeKey, childrenRedisKey(bottle.ParentID)},
+		bottle.ID, string(raw), ttlSec, bottle.CreatedAt, s.maxBottles, bottle.ParentID).Text()
 	if err != nil {
 		return err
 	}
@@ -742,6 +751,52 @@ func (s *Store) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedA
 	}
 	if len(missing) > 0 {
 		_ = s.rdb.ZRem(ctx, activeKey, missing).Err()
+	}
+	return bottles, nil
+}
+
+// ListChildren returns bottles whose parentId equals parentID, read from the
+// per-parent index maintained at create time. Bottles created before the
+// index existed are absent here; Postgres covers the archive.
+func (s *Store) ListChildren(ctx context.Context, parentID string, limit int) ([]Bottle, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	ids, err := s.rdb.SMembers(ctx, childrenRedisKey(parentID)).Result()
+	if err != nil || len(ids) == 0 {
+		return []Bottle{}, err
+	}
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	keys := make([]string, len(ids))
+	for i, id := range ids {
+		keys[i] = bottleRedisKey(id)
+	}
+	vals, err := s.rdb.MGet(ctx, keys...).Result()
+	if err != nil {
+		return nil, err
+	}
+	bottles := make([]Bottle, 0, len(vals))
+	for _, val := range vals {
+		if val == nil {
+			continue
+		}
+		raw, ok := val.(string)
+		if !ok {
+			continue
+		}
+		var bottle Bottle
+		if err := json.Unmarshal([]byte(raw), &bottle); err != nil {
+			continue
+		}
+		if bottle.ParentID != parentID {
+			continue
+		}
+		bottles = append(bottles, bottle)
 	}
 	return bottles, nil
 }
