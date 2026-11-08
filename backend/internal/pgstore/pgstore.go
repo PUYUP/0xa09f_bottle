@@ -445,25 +445,44 @@ ORDER BY kr.created_at ASC`, now)
 // PubkeysForKid returns every pubkey ever bound to a kid: deposit-time
 // registry entries plus recipientPublicKey values embedded in envelopes.
 func (p *PGStore) PubkeysForKid(ctx context.Context, kid string) ([]string, error) {
+	out, err := p.PubkeysForKids(ctx, []string{kid})
+	if err != nil {
+		return nil, err
+	}
+	return out[kid], nil
+}
+
+// PubkeysForKids batch-resolves pubkeys for many kids in one query.
+// Sources: key_registry (deposits), bottle_kids (envelope recipients,
+// including self:<userId> sender markers), and user_identities so a
+// self:<userId> kid is provable before the user's first bottle exists.
+func (p *PGStore) PubkeysForKids(ctx context.Context, kids []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(kids))
+	if len(kids) == 0 {
+		return out, nil
+	}
 	rows, err := p.pool.Query(ctx, `
-SELECT pubkey FROM (
-  SELECT public_key AS pubkey FROM key_registry WHERE kid = $1
+SELECT kid, pubkey FROM (
+  SELECT kid, public_key AS pubkey FROM key_registry WHERE kid = ANY($1::text[])
   UNION
-  SELECT pubkey FROM bottle_kids WHERE kid = $1 AND pubkey <> ''
-) t WHERE pubkey <> ''`, kid)
+  SELECT kid, pubkey FROM bottle_kids WHERE kid = ANY($1::text[]) AND pubkey <> ''
+  UNION
+  SELECT 'self:' || ui.user_id AS kid, ui.public_key AS pubkey
+  FROM user_identities ui
+  WHERE 'self:' || ui.user_id = ANY($1::text[])
+) t WHERE pubkey <> ''`, kids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var pubs []string
 	for rows.Next() {
-		var pub string
-		if err := rows.Scan(&pub); err != nil {
+		var kid, pub string
+		if err := rows.Scan(&kid, &pub); err != nil {
 			return nil, err
 		}
-		pubs = append(pubs, pub)
+		out[kid] = append(out[kid], pub)
 	}
-	return pubs, rows.Err()
+	return out, rows.Err()
 }
 
 // RunRetention prunes operational tables that grow unboundedly. User-facing

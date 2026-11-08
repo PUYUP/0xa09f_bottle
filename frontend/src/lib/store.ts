@@ -703,10 +703,20 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
   }
   const serverPub = await getServerPub();
   const proofs: Record<string, { ts: number; proof: string }> = {};
+  // The server remembers kids it has already verified under this identity
+  // (bound via the self:<userId> proof), so we only re-prove kids it has
+  // never seen — usually just newly deposited bait. When everything is
+  // already verified we still send one proof (self preferred) because the
+  // server requires at least one valid proof per issuance.
+  const knownVerified = await loadPopVerified();
+  const toProve = kids.filter((k) => !knownVerified.has(k));
+  if (!toProve.length) {
+    toProve.push(kids.find((k) => k.startsWith(SELF_PREFIX)) ?? kids[0]);
+  }
   // The ECDH shared secret per kid is time-invariant — cache it so repeat
   // proof rounds only recompute the cheap SHA-256 digest, not key agreement.
   await Promise.all(
-    kids.map(async (kid) => {
+    toProve.map(async (kid) => {
       const priv = await privateJwkForKid(kid);
       if (!priv) return;
       try {
@@ -740,7 +750,15 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
     exp: Date.now() + ((expiresIn || 600) - 60) * 1000,
     verified: new Set(verifiedKids || []),
   });
+  // Server is authoritative for the verified set — replace, don't merge,
+  // so a flushed server-side set self-heals on the next round.
+  await idbPut(KV_STORE, { id: "pop:verified", kids: verifiedKids || [] }).catch(() => {});
   return token;
+}
+
+async function loadPopVerified(): Promise<Set<string>> {
+  const rec = await idbGet<{ kids?: string[] }>(KV_STORE, "pop:verified").catch(() => null);
+  return new Set(rec?.kids || []);
 }
 
 // applyBottleStats persists the server's per-bottle reply aggregates
@@ -767,15 +785,28 @@ async function applyBottleStats(bottle: Bottle) {
     for (const prefix of ["caught:", "sent:"]) {
       const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${t.id}`).catch(() => null);
       if (!rec) continue;
+      let dirty = false;
       if (t.child) {
-        if (bottle.childCount != null) rec.childCount = bottle.childCount;
-        if (bottle.lastChildAt) rec.lastChildAt = bottle.lastChildAt;
+        if (bottle.childCount != null && rec.childCount !== bottle.childCount) {
+          rec.childCount = bottle.childCount;
+          dirty = true;
+        }
+        if (bottle.lastChildAt && rec.lastChildAt !== bottle.lastChildAt) {
+          rec.lastChildAt = bottle.lastChildAt;
+          dirty = true;
+        }
       }
       if (t.thread) {
-        if (bottle.threadCount != null) rec.threadCount = bottle.threadCount;
-        if (bottle.threadLastAt) rec.threadLastAt = bottle.threadLastAt;
+        if (bottle.threadCount != null && rec.threadCount !== bottle.threadCount) {
+          rec.threadCount = bottle.threadCount;
+          dirty = true;
+        }
+        if (bottle.threadLastAt && rec.threadLastAt !== bottle.threadLastAt) {
+          rec.threadLastAt = bottle.threadLastAt;
+          dirty = true;
+        }
       }
-      await idbPut(META_STORE, rec).catch(() => {});
+      if (dirty) await idbPut(META_STORE, rec).catch(() => {});
     }
   }
 }
@@ -785,6 +816,17 @@ async function applyBottleStats(bottle: Bottle) {
 // record. Returns true when a new record was written this session.
 async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Promise<boolean> {
   if (caughtThisSession.has(bottle.id)) return false;
+  // Already decrypted locally? Skip the ECDH unwrap + AES-GCM decrypt +
+  // claim round-trip — the overlap window re-scans recent bottles every
+  // session and this is the dominant per-bottle cost. Records whose claim
+  // failed (ok === false) are retried so transient claim errors heal.
+  const existing =
+    (await idbGet<ThreadRecord>(META_STORE, `caught:${bottle.id}`).catch(() => null)) ??
+    (await idbGet<ThreadRecord>(META_STORE, `sent:${bottle.id}`).catch(() => null));
+  if (existing?.plain && existing.claim?.ok !== false) {
+    caughtThisSession.add(bottle.id);
+    return false;
+  }
   for (const envelope of bottle.envelopes || []) {
     const isSelf = typeof envelope.kid === "string" && envelope.kid.startsWith(SELF_PREFIX);
     let record = envelope.kid && !isSelf ? byKid.get(envelope.kid) : undefined;
@@ -1022,7 +1064,36 @@ export async function checkBottles() {
   await renderInbox();
   await refreshActivePoolKeys();
   connectEvents().catch(() => {});
+  evictMetaOverflow().catch(() => {});
   log(`checked ${scanned} bottle(s); caught ${caught}`);
+}
+
+// META_STORE is a decryption cache — the ciphertext lives on the server, so
+// evicting old records loses nothing permanent. Cap total records and drop
+// the oldest by caughtAt, but never evict a record that a kept record still
+// references as parent/root (prevents orphaning thread branches).
+const META_RECORD_CAP = 5000;
+
+async function evictMetaOverflow() {
+  const all = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
+  if (all.length <= META_RECORD_CAP) return;
+  const excess = all.length - META_RECORD_CAP;
+  const sorted = [...all].sort((a, b) => (a.caughtAt || 0) - (b.caughtAt || 0));
+  // Bottle ids referenced as parent/root by kept records must survive.
+  const referenced = new Set<string>();
+  for (const r of sorted.slice(excess)) {
+    if (r?.bottle?.parentId) referenced.add(r.bottle.parentId);
+    if (r?.bottle?.rootId) referenced.add(r.bottle.rootId);
+  }
+  let dropped = 0;
+  for (const r of sorted) {
+    if (dropped >= excess) break;
+    const bid = r?.bottle?.id;
+    if (!r?.id || (bid && referenced.has(bid))) continue;
+    await idbDelete(META_STORE, r.id).catch(() => {});
+    dropped++;
+  }
+  if (dropped) log(`evicted ${dropped} old message record(s) from local cache`);
 }
 
 // ---------- realtime (SSE) ----------
@@ -1266,6 +1337,7 @@ export async function importVaultFile(file: File) {
   syncReadAt.clear();
   syncDirty.clear();
   await idbDelete(KV_STORE, "sync:cursor").catch(() => {});
+  await idbDelete(KV_STORE, "pop:verified").catch(() => {});
   let restored = 0;
 
   if (payload.version === 4) {

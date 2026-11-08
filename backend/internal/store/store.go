@@ -950,6 +950,47 @@ func (s *Store) PopTokenKids(ctx context.Context, token string) ([]string, bool)
 	return v.Kids, true
 }
 
+// ---------- verified kid sets ----------
+// Proof-of-possession is expensive per kid (PG lookup + ECDH). Once a kid
+// is verified under an identity (proven via its self:<userId> kid), the
+// server remembers the whole set for popSetTTL so later token requests only
+// need proofs for NEW kids. Kid possession is permanent — private keys do
+// not change hands — so a verified kid stays authorized until the set
+// expires. Sets are bound to userId, which itself requires the identity
+// key's proof, so a stolen pool key alone cannot expand access.
+
+const (
+	popSetPrefix  = "a09f:popset:"
+	popSetTTL     = 7 * 24 * time.Hour
+	popSetMaxKids = 5000
+)
+
+func (s *Store) PopSetGet(ctx context.Context, userID string) ([]string, error) {
+	raw, err := s.rdb.Get(ctx, popSetPrefix+userID).Result()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var kids []string
+	if err := json.Unmarshal([]byte(raw), &kids); err != nil {
+		return nil, nil
+	}
+	return kids, nil
+}
+
+func (s *Store) PopSetPut(ctx context.Context, userID string, kids []string) error {
+	if len(kids) > popSetMaxKids {
+		kids = kids[:popSetMaxKids]
+	}
+	raw, err := json.Marshal(kids)
+	if err != nil {
+		return err
+	}
+	return s.rdb.Set(ctx, popSetPrefix+userID, raw, popSetTTL).Err()
+}
+
 var pickupScript = redis.NewScript(`
 local raw = redis.call('GET', KEYS[1])
 if not raw then

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"log"
+	"strings"
 	"time"
 
 	"a09f/bottle/internal/keyauth"
@@ -57,7 +58,7 @@ func (s *Server) popToken(c fiber.Ctx) error {
 		}
 		seen[kid] = struct{}{}
 		kids = append(kids, kid)
-		if len(kids) >= 300 {
+		if len(kids) >= 2000 {
 			break
 		}
 	}
@@ -73,6 +74,13 @@ func (s *Server) popToken(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusInternalServerError, "auth key unavailable")
 		}
 		now := time.Now().Unix()
+		// One batched pubkey lookup for the whole kid set instead of a
+		// query per kid — keeps issuance O(1) round-trips at any pool size.
+		pubsMap, err := s.pg.PubkeysForKids(c.Context(), kids)
+		if err != nil {
+			log.Printf("pg pubkeys for kids: %v", err)
+			return fiber.NewError(fiber.StatusInternalServerError, "pubkey lookup failed")
+		}
 		for _, kid := range kids {
 			p, ok := req.Proofs[kid]
 			if !ok || p.Ts <= 0 {
@@ -85,12 +93,7 @@ func (s *Server) popToken(c fiber.Ctx) error {
 			if delta > keyauth.ProofWindowSkew {
 				continue
 			}
-			pubs, err := s.pg.PubkeysForKid(c.Context(), kid)
-			if err != nil {
-				log.Printf("pg pubkeys for kid: %v", err)
-				continue
-			}
-			if kidProofValid(serverPriv, pubs, kid, p.Ts, p.Proof, now) {
+			if kidProofValid(serverPriv, pubsMap[kid], kid, p.Ts, p.Proof, now) {
 				verified = append(verified, kid)
 			}
 		}
@@ -103,13 +106,49 @@ func (s *Server) popToken(c fiber.Ctx) error {
 	if len(verified) == 0 {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "no_valid_proofs"})
 	}
-	token, err := s.store.IssuePopToken(c.Context(), verified)
+
+	// Verified-set expansion: when the request proves the identity kid
+	// (self:<userId>), merge this request's verified kids into the user's
+	// remembered set so subsequent tokens only need proofs for new kids.
+	// The set is bound to userId — proving it requires the identity private
+	// key, so a stolen pool key cannot expand access to sibling kids.
+	final := verified
+	if s.pg != nil {
+		var bindUID string
+		for _, k := range verified {
+			if strings.HasPrefix(k, "self:") {
+				bindUID = strings.TrimPrefix(k, "self:")
+				break
+			}
+		}
+		if bindUID != "" {
+			if stored, err := s.store.PopSetGet(c.Context(), bindUID); err == nil && len(stored) > 0 {
+				seenSet := make(map[string]struct{}, len(stored)+len(verified))
+				for _, k := range stored {
+					seenSet[k] = struct{}{}
+				}
+				for _, k := range verified {
+					seenSet[k] = struct{}{}
+				}
+				merged := make([]string, 0, len(seenSet))
+				for k := range seenSet {
+					merged = append(merged, k)
+				}
+				final = merged
+			}
+			if err := s.store.PopSetPut(c.Context(), bindUID, final); err != nil {
+				log.Printf("pop set put %s: %v", bindUID, err)
+			}
+		}
+	}
+
+	token, err := s.store.IssuePopToken(c.Context(), final)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "token issue failed")
 	}
 	return c.JSON(fiber.Map{
 		"token":     token,
-		"kids":      verified,
+		"kids":      final,
 		"expiresIn": 600,
 	})
 }
