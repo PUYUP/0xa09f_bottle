@@ -326,6 +326,21 @@ export default function App() {
               privacy
             </span>
           </div>
+          <div
+            className="ion-text-center"
+            style={{ fontSize: 11, paddingBottom: 8, color: "var(--ion-color-medium)" }}
+          >
+            your IP is visible to the relay — use{" "}
+            <a
+              href="https://www.torproject.org/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: "var(--ion-color-primary)" }}
+            >
+              Tor Browser
+            </a>{" "}
+            for untracked browsing
+          </div>
         </IonToolbar>
       </IonFooter>
     </IonApp>

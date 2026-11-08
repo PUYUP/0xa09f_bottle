@@ -360,6 +360,18 @@ export default function App() {
         {" · "}
         <span className="retro-link" onClick={() => setLegal("privacy")}>privacy</span>
       </p>
+      <p className="mt-1 text-center text-[12px] text-neutral-500">
+        your IP is visible to the relay — use{" "}
+        <a
+          className="retro-link"
+          href="https://www.torproject.org/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Tor Browser
+        </a>{" "}
+        for untracked browsing
+      </p>
     </main>
   );
 }
