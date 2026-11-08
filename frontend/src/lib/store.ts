@@ -269,9 +269,11 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
   const selfEnv = await wrapSessionKey(bottleId, identity.publicJwk, rawSessionKey, selfKid);
   selfEnv.kid = selfKid;
 
+  // createdAt in unix seconds — the unit the server stores and the unit
+  // lastChildAt stats use, so inbox ordering stays consistent.
   const bottle: Bottle = {
     id: bottleId,
-    createdAt: Date.now(),
+    createdAt: Math.floor(Date.now() / 1000),
     depth: 1,
     maxDeliveries: envelopes.length,
     payloadIv: bytesToB64(payloadIV),
@@ -294,7 +296,7 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
 
   await storeSentRecord(bottleId, {
     id: bottleId,
-    createdAt: Date.now(),
+    createdAt: Math.floor(Date.now() / 1000),
     depth: 1,
     maxDeliveries: envelopes.length,
     status: "ACTIVE",
@@ -345,7 +347,7 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
     method: "POST",
     body: JSON.stringify({
       id: bottleId,
-      createdAt: Date.now(),
+      createdAt: Math.floor(Date.now() / 1000),
       depth,
       parentId: bottle.id,
       maxDeliveries: 1,
@@ -356,7 +358,7 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
   });
   await storeSentRecord(bottleId, {
     id: bottleId,
-    createdAt: Date.now(),
+    createdAt: Math.floor(Date.now() / 1000),
     depth,
     parentId: bottle.id,
     maxDeliveries: 1,
@@ -616,11 +618,24 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
   const children = await fetchBottleChildren(parentId, token).catch(() => []);
   const byKid = keyByKidMap();
   let n = 0;
+  let maxChildAt = 0;
   for (const b of children) {
     await applyBottleStats(b);
+    if (b.createdAt && b.createdAt > maxChildAt) maxChildAt = b.createdAt;
     if (await processBottle(b, byKid)) n++;
   }
-  if (n) await renderInbox();
+  // Fresh replies should re-rank the parent immediately — bump lastChildAt
+  // from observed children instead of waiting for the next listing scan.
+  if (maxChildAt > 0) {
+    for (const prefix of ["caught:", "sent:"]) {
+      const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${parentId}`).catch(() => null);
+      if (rec && (rec.lastChildAt || 0) < maxChildAt) {
+        rec.lastChildAt = maxChildAt;
+        await idbPut(META_STORE, rec).catch(() => {});
+      }
+    }
+  }
+  if (n || maxChildAt > 0) await renderInbox();
   return n;
 }
 
@@ -741,6 +756,13 @@ function recOrderKey(r: ThreadRecord): number {
 
 export async function buildThreads(): Promise<ThreadBundle> {
   const all = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
+  // Legacy records stored bottle.createdAt in milliseconds while the server
+  // and lastChildAt use unix seconds — normalize in place so ordering is
+  // consistent across old and new data.
+  for (const r of all) {
+    const c = r.bottle?.createdAt || 0;
+    if (c > 1e11) r.bottle!.createdAt = Math.floor(c / 1000);
+  }
   const recs = all
     .filter(
       (r) =>
