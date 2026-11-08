@@ -74,7 +74,10 @@ export default function App() {
     <main className="mx-auto max-w-3xl p-2">
       {/* ── site header ────────────────────────────────────── */}
       <div className="mb-2 text-center">
-        <h1 className="text-3xl font-bold">
+        <h1
+          className="text-3xl font-bold"
+          style={{ textShadow: "1px 1px 0 #ffffff, -1px -1px 0 #909090" }}
+        >
           <span className="text-blue-900">🌊</span> saltleak
         </h1>
         <p className="text-xs italic text-neutral-700">
