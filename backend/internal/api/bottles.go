@@ -358,6 +358,26 @@ func (s *Server) fetchCursorPage(ctx context.Context, limit int, beforeCreatedAt
 // nextCursor always points at the last scanned candidate so filtered-out
 // bottles are never skipped.
 func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64, beforeID string, kids map[string]struct{}) error {
+	// Postgres path: the bottle_kids index answers "bottles involving these
+	// kids" (recipient, self:<userId> sender marker, reply:<id>) directly and
+	// exhaustively — no corpus scan, no page cap. Falls back to the Redis+PG
+	// scan below if the query fails.
+	if s.pg != nil {
+		kidList := make([]string, 0, len(kids))
+		for k := range kids {
+			kidList = append(kidList, k)
+		}
+		if bottles, err := s.pg.ListBottlesByKids(c.Context(), kidList, limit, beforeCreatedAt, beforeID); err == nil {
+			nextCursor := ""
+			if len(bottles) > 0 {
+				last := bottles[len(bottles)-1]
+				nextCursor = fmt.Sprintf("%d_%s", last.CreatedAt, last.ID)
+			}
+			return c.JSON(fiber.Map{"bottles": bottles, "nextCursor": nextCursor})
+		} else {
+			log.Printf("pg list bottles by kids: %v", err)
+		}
+	}
 	const pageSize = 200
 	const maxPages = 30
 	out := make([]store.Bottle, 0, limit)

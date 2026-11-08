@@ -28,6 +28,16 @@ CREATE TABLE IF NOT EXISTS bottles (
 CREATE INDEX IF NOT EXISTS bottles_created_at_idx ON bottles (created_at DESC);
 CREATE INDEX IF NOT EXISTS bottles_parent_id_idx ON bottles (parent_id) WHERE parent_id <> '';
 
+-- One row per envelope kid: the index behind "bottles involving me"
+-- queries (recipient pool kids, self:<userId> sender marker, reply:<id>).
+CREATE TABLE IF NOT EXISTS bottle_kids (
+  bottle_id  TEXT NOT NULL REFERENCES bottles(id) ON DELETE CASCADE,
+  kid        TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (bottle_id, kid)
+);
+CREATE INDEX IF NOT EXISTS bottle_kids_kid_idx ON bottle_kids (kid);
+
 CREATE TABLE IF NOT EXISTS users (
   id          TEXT PRIMARY KEY,
   username    TEXT NOT NULL,
@@ -113,7 +123,27 @@ func New(ctx context.Context, databaseURL string, maxConns, minConns int) (*PGSt
 		pool.Close()
 		return nil, fmt.Errorf("pg migrate: %w", err)
 	}
-	return &PGStore{pool: pool}, nil
+	pg := &PGStore{pool: pool}
+	pg.backfillBottleKids(ctx)
+	return pg, nil
+}
+
+// backfillBottleKids populates bottle_kids from existing envelopes JSONB.
+// Runs once when the table is empty; afterwards SaveBottle keeps it in sync.
+func (p *PGStore) backfillBottleKids(ctx context.Context) {
+	var n int
+	if err := p.pool.QueryRow(ctx, `SELECT count(*) FROM bottle_kids`).Scan(&n); err != nil || n > 0 {
+		return
+	}
+	if _, err := p.pool.Exec(ctx, `
+INSERT INTO bottle_kids (bottle_id, kid, created_at)
+SELECT b.id, e->>'kid', b.created_at
+FROM bottles b, LATERAL jsonb_array_elements(b.envelopes) e
+WHERE e->>'kid' IS NOT NULL AND e->>'kid' <> ''
+ON CONFLICT DO NOTHING`); err != nil {
+		// Non-fatal: new bottles still populate the table going forward.
+		fmt.Printf("pg backfill bottle_kids: %v\n", err)
+	}
 }
 
 func (p *PGStore) Ping(ctx context.Context) error {
@@ -162,6 +192,31 @@ ON CONFLICT (id) DO UPDATE SET
   END`,
 		b.ID, b.CreatedAt, b.Depth, b.ParentID, b.MaxDeliveries, b.Deliveries, b.Status,
 		b.PayloadIV, b.Ciphertext, string(envelopes), string(kidsJSON))
+	if err != nil {
+		return err
+	}
+	return p.syncBottleKids(ctx, b)
+}
+
+// syncBottleKids rewrites the bottle_kids rows for a bottle so the
+// kid-filtered index always mirrors the envelopes JSONB.
+func (p *PGStore) syncBottleKids(ctx context.Context, b store.Bottle) error {
+	kids := make([]string, 0, len(b.Envelopes))
+	for _, env := range b.Envelopes {
+		if env.KID != "" {
+			kids = append(kids, env.KID)
+		}
+	}
+	if _, err := p.pool.Exec(ctx, `DELETE FROM bottle_kids WHERE bottle_id = $1`, b.ID); err != nil {
+		return err
+	}
+	if len(kids) == 0 {
+		return nil
+	}
+	_, err := p.pool.Exec(ctx, `
+INSERT INTO bottle_kids (bottle_id, kid, created_at)
+SELECT $1, k, $3 FROM unnest($2::text[]) AS k
+ON CONFLICT DO NOTHING`, b.ID, kids, b.CreatedAt)
 	return err
 }
 
@@ -246,6 +301,47 @@ LIMIT $2`, parentID, limit)
 			continue
 		}
 		_ = json.Unmarshal(kids, &b.DeliveredKids)
+		bottles = append(bottles, b)
+	}
+	return bottles, rows.Err()
+}
+
+// ListBottlesByKids returns bottles carrying at least one of the given
+// envelope kids, newest-first with the same composite cursor semantics as
+// ListBottlesCursor. Served by the bottle_kids index, so it stays fast and
+// exhaustive regardless of corpus size.
+func (p *PGStore) ListBottlesByKids(ctx context.Context, kids []string, limit int, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if len(kids) == 0 {
+		return []store.Bottle{}, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+SELECT DISTINCT b.id, b.created_at, b.depth, b.parent_id, b.max_deliveries, b.deliveries, b.status, b.payload_iv, b.ciphertext, b.envelopes, b.delivered_kids
+FROM bottles b
+JOIN bottle_kids k ON k.bottle_id = b.id
+WHERE k.kid = ANY($1::text[])
+  AND ($2 = 0 OR b.created_at < $2 OR (b.created_at = $2 AND b.id COLLATE "C" < $3))
+ORDER BY b.created_at DESC, b.id COLLATE "C" DESC
+LIMIT $4`, kids, beforeCreatedAt, beforeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bottles := make([]store.Bottle, 0, limit)
+	for rows.Next() {
+		var b store.Bottle
+		var envelopes, delivered []byte
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.MaxDeliveries,
+			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &delivered); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(envelopes, &b.Envelopes); err != nil {
+			continue
+		}
+		_ = json.Unmarshal(delivered, &b.DeliveredKids)
 		bottles = append(bottles, b)
 	}
 	return bottles, rows.Err()
