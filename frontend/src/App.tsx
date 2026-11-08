@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useApp } from "./hooks/useApp";
 import { AccountPanel, DeviceCard, MyKeysPanel, PoolPanel, StatsCard, VaultButtons } from "./components/Panels";
-import { ThreadList } from "./components/Thread";
+import { ThreadList, countReplies, findNode } from "./components/Thread";
 import { BOTTLE_QUOTA, MAX_LOCAL_KEYS } from "./lib/crypto";
 import {
   buildThreads,
@@ -26,6 +26,7 @@ export default function App() {
   const [page, setPage] = useState<"catch" | "pool" | "bait" | "account">("catch");
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [threadLimit, setThreadLimit] = useState(10);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>> | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -200,13 +201,32 @@ export default function App() {
       )}
 
       {/* ── catch page ─────────────────────────────────────── */}
-      {page === "catch" && (
+      {page === "catch" && (() => {
+        const detailNode = detailId ? findNode(threads, detailId) : null;
+        return (
       <div className="bevel mb-2">
         <div className="retro-titlebar">
-          <span>📬 catch — {threads.length} message{threads.length === 1 ? "" : "s"}</span>
-          <span className="text-[13px]">only you can read these</span>
+          <span>
+            {detailNode
+              ? `📬 message ${(detailNode.rec.bottle?.id || "").slice(0, 8)} — depth ${(detailNode.rec.bottle?.depth || 1)}`
+              : `📬 catch — ${threads.length} message${threads.length === 1 ? "" : "s"}`}
+          </span>
+          <span className="text-[13px]">
+            {detailNode ? (
+              <span className="retro-link" onClick={() => setDetailId(null)}>← back to catch</span>
+            ) : (
+              "only you can read these"
+            )}
+          </span>
         </div>
         <div className="retro-body">
+          {detailNode ? (
+            <ThreadList
+              roots={[detailNode]}
+              onOpen={(n) => n.rec.bottle?.id && setDetailId(n.rec.bottle.id)}
+            />
+          ) : (
+            <>
           {threads.length === 0 &&
             (isNewUser ? (
               <div className="msg bevel-in">
@@ -245,7 +265,26 @@ export default function App() {
                 🎣 the void is quiet — nothing on the line yet.
               </div>
             ))}
-          <ThreadList roots={threads.slice(0, threadLimit)} />
+          {threads.slice(0, threadLimit).map((r) => {
+            const replies = countReplies(r);
+            const isSent = r.rec.claim?.status === "SENT";
+            return (
+              <div
+                key={r.rec.id}
+                className={`msg bevel-in clickable${isSent ? " sent" : ""}`}
+                onClick={() => r.rec.bottle?.id && setDetailId(r.rec.bottle.id)}
+              >
+                <div className="mb-1 text-[13px] text-neutral-600">
+                  <b>🎣 {(r.rec.bottle?.id || "").slice(0, 8)}</b>
+                  {" · "}
+                  {r.rec.claim?.status || "CLAIMED"} · {r.rec.claim?.deliveries ?? "?"}/{r.rec.bottle?.maxDeliveries}
+                  {isSent && " · (yours)"}
+                  {replies > 0 && <span className="text-blue-800"> · 💬 {replies} repl{replies === 1 ? "y" : "ies"}</span>}
+                </div>
+                <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{r.rec.plain?.text}</p>
+              </div>
+            );
+          })}
           {threads.length > threadLimit && (
             <div className="mt-2 text-center">
               <button
@@ -256,9 +295,12 @@ export default function App() {
               </button>
             </div>
           )}
+            </>
+          )}
         </div>
       </div>
-      )}
+        );
+      })()}
 
       {/* ── log ────────────────────────────────────────────── */}
       <div className="bevel">

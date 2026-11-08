@@ -210,3 +210,9 @@ hr.retro-hr {
 .msg.sent {
   background: #e8f0fe;
 }
+.msg.clickable {
+  cursor: pointer;
+}
+.msg.clickable:hover {
+  background: #f4f4f4;
+}
