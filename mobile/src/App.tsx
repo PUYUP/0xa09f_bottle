@@ -32,6 +32,8 @@ import {
   importVaultFile,
   readTTLSeconds,
   log,
+  fetchThreadChildren,
+  openThread,
 } from "@shared/store";
 import type { ThreadNode } from "@shared/store";
 import type { ThreadRecord } from "@shared/types";
@@ -77,6 +79,39 @@ export default function App() {
       .map((r) => r.bottle?.id)
       .filter(Boolean) as string[]
   );
+
+  // Lazy reply loading: the server reports childCount per bottle, so any
+  // authored node whose direct children aren't all local yet gets a
+  // per-thread fetch — capped per cycle to stay gentle.
+  const fetchingRef = useRef(false);
+  useEffect(() => {
+    if (fetchingRef.current) return;
+    const authored = new Set(
+      state.records
+        .filter((r) => r.id.startsWith("sent:"))
+        .map((r) => r.bottle?.id)
+        .filter(Boolean) as string[]
+    );
+    const missing: string[] = [];
+    const walk = (n: ThreadNode) => {
+      const bid = n.rec.bottle?.id;
+      if (bid && authored.has(bid) && (n.rec.childCount || 0) > n.children.length) {
+        missing.push(bid);
+      }
+      n.children.forEach(walk);
+    };
+    threads.forEach(walk);
+    if (!missing.length) return;
+    fetchingRef.current = true;
+    (async () => {
+      for (const id of missing.slice(0, 10)) {
+        await fetchThreadChildren(id).catch(() => {});
+      }
+      fetchingRef.current = false;
+      buildThreads().then((t) => setThreads(t.roots)).catch(() => {});
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads, state.records]);
 
   const run = (fn: () => Promise<void>) => {
     setBusy(true);
@@ -178,8 +213,21 @@ export default function App() {
               (bottle?.depth || 1) < MAX_THREAD_DEPTH &&
               !isSent &&
               !sentIds.has(bottle?.id || "");
+            const authored = sentIds.has(bottle?.id || "");
+            const hasNewReplies =
+              authored &&
+              (node.rec.lastChildAt || 0) > 0 &&
+              (node.rec.lastChildAt || 0) * 1000 > (node.rec.repliesSeenAt || 0);
             return (
-              <IonItem key={node.rec.id} lines="full">
+              <IonItem
+                key={node.rec.id}
+                lines="full"
+                button
+                onClick={() => {
+                  const bid = bottle?.id;
+                  if (bid) openThread(bid).catch(() => {});
+                }}
+              >
                 <IonLabel>
                   <div style={{ paddingLeft: depth * 16 }}>
                     <p style={{ margin: "4px 0", whiteSpace: "pre-wrap" }}>{plain?.text}</p>
@@ -188,6 +236,9 @@ export default function App() {
                       {claim?.deliveries ?? "?"}/{bottle?.maxDeliveries} ·{" "}
                       {(bottle?.id || "").slice(0, 8)}
                       {depth > 0 && " ↳"}
+                      {hasNewReplies && (
+                        <span style={{ color: "#c0392b", fontWeight: 700 }}> ● new</span>
+                      )}
                     </IonNote>
                     {!isSent && (
                       <div style={{ marginTop: 4, display: "flex", gap: 12 }}>

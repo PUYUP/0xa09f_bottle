@@ -11,6 +11,7 @@ import {
   generateAndDeposit,
   init,
   log,
+  openThread,
   readTTLSeconds,
 } from "./lib/store";
 import { getIdentity } from "./lib/identity";
@@ -251,8 +252,10 @@ export default function App() {
               roots={[detailNode]}
               onOpen={(n) => {
                 const id = n.rec.bottle?.id;
-                if (id && id !== detailPath[detailPath.length - 1])
+                if (id && id !== detailPath[detailPath.length - 1]) {
+                  openThread(id).catch(() => {});
                   setDetailPath((p) => [...p, id]);
+                }
               }}
             />
           ) : (
@@ -298,18 +301,38 @@ export default function App() {
           {threads.slice(0, threadLimit).map((r) => {
             const replies = countReplies(r);
             const isSent = r.rec.claim?.status === "SENT";
+            const bottleId = r.rec.bottle?.id || "";
+            // Badge: server-reported reply activity newer than what we've
+            // opened, on bottles we authored (sent: records carry the reply
+            // key that decrypts responses).
+            const authored = state.records.some(
+              (m) => m.id === `sent:${bottleId}`
+            );
+            const hasNewReplies =
+              authored &&
+              (r.rec.lastChildAt || 0) > 0 &&
+              (r.rec.lastChildAt || 0) * 1000 > (r.rec.repliesSeenAt || 0);
             return (
               <div
                 key={r.rec.id}
                 className={`msg bevel-in clickable${isSent ? " sent" : ""}`}
-                onClick={() => r.rec.bottle?.id && setDetailPath([r.rec.bottle.id])}
+                onClick={() => {
+                  if (!bottleId) return;
+                  openThread(bottleId).catch(() => {});
+                  setDetailPath([bottleId]);
+                }}
               >
                 <div className="mb-1 text-[13px] text-neutral-600">
-                  <b>🎣 {(r.rec.bottle?.id || "").slice(0, 8)}</b>
+                  <b>🎣 {bottleId.slice(0, 8)}</b>
                   {" · "}
                   {r.rec.claim?.status || "CLAIMED"} · {r.rec.claim?.deliveries ?? "?"}/{r.rec.bottle?.maxDeliveries}
                   {isSent && " · (yours)"}
                   {replies > 0 && <span className="text-blue-800"> · 💬 {replies} repl{replies === 1 ? "y" : "ies"}</span>}
+                  {hasNewReplies && (
+                    <span className="ml-1 rounded-sm bg-red-600 px-1 font-bold text-white">
+                      ● new
+                    </span>
+                  )}
                 </div>
                 <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{r.rec.plain?.text}</p>
               </div>

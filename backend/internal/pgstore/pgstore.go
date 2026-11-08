@@ -428,6 +428,35 @@ LIMIT $4`, kids, beforeCreatedAt, beforeID, limit)
 	return bottles, rows.Err()
 }
 
+// ChildStats returns per-parent reply aggregates for a set of bottle ids:
+// direct-child count and the newest child's created_at. Used by the
+// kids-filtered listing so clients can badge threads with unseen replies
+// without fetching every thread's children.
+func (p *PGStore) ChildStats(ctx context.Context, ids []string) (map[string][2]int64, error) {
+	out := make(map[string][2]int64, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := p.pool.Query(ctx, `
+SELECT parent_id, COUNT(*)::bigint, COALESCE(MAX(created_at), 0)
+FROM bottles
+WHERE parent_id = ANY($1::text[])
+GROUP BY parent_id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var parent string
+		var count, last int64
+		if err := rows.Scan(&parent, &count, &last); err != nil {
+			return nil, err
+		}
+		out[parent] = [2]int64{count, last}
+	}
+	return out, rows.Err()
+}
+
 func (p *PGStore) ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error) {
 	if limit <= 0 {
 		limit = 50

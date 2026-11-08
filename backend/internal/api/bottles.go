@@ -392,6 +392,20 @@ func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64
 			kidList = append(kidList, k)
 		}
 		if bottles, err := s.pg.ListBottlesByKids(c.Context(), kidList, limit, beforeCreatedAt, beforeID); err == nil {
+			ids := make([]string, len(bottles))
+			for i, b := range bottles {
+				ids[i] = b.ID
+			}
+			if stats, err := s.pg.ChildStats(c.Context(), ids); err != nil {
+				log.Printf("pg child stats: %v", err)
+			} else {
+				for i := range bottles {
+					if st, ok := stats[bottles[i].ID]; ok {
+						bottles[i].ChildCount = int(st[0])
+						bottles[i].LastChildAt = st[1]
+					}
+				}
+			}
 			nextCursor := ""
 			if len(bottles) > 0 {
 				last := bottles[len(bottles)-1]

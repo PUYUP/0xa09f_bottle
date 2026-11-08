@@ -66,6 +66,12 @@ type Bottle struct {
 	Ciphertext    string     `json:"ciphertext"`
 	Envelopes     []Envelope `json:"envelopes"`
 	DeliveredKids []string   `json:"deliveredKids,omitempty"`
+	// ChildCount/LastChildAt are listing-only metadata: how many direct
+	// children (replies) the bottle has and when the newest arrived. Populated
+	// by the kids-filtered listing so clients can badge threads with unseen
+	// reply activity without fetching every thread's children.
+	ChildCount  int   `json:"childCount,omitempty"`
+	LastChildAt int64 `json:"lastChildAt,omitempty"`
 }
 
 type PickupResult struct {

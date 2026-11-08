@@ -42,6 +42,8 @@ export interface Bottle {
   ciphertext?: string;
   envelopes?: Envelope[];
   status?: string;
+  childCount?: number;
+  lastChildAt?: number;
 }
 
 export interface Plain {
@@ -64,6 +66,9 @@ export interface ThreadRecord {
   kid?: string;
   claim?: Claim;
   caughtAt?: number;
+  childCount?: number;
+  lastChildAt?: number;
+  repliesSeenAt?: number;
   privateJwk?: JWK;
   publicJwk?: JWK;
   createdAt?: number;

@@ -386,6 +386,7 @@ async function storeSentRecord(
     kid: kid || "",
     claim: { status: "SENT" },
     caughtAt: Date.now(),
+    repliesSeenAt: Date.now(),
   }).catch(() => {});
 }
 
@@ -410,28 +411,16 @@ export async function fetchBottleChildren(parentId: string, token: string, limit
 
 const caughtThisSession = new Set<string>();
 
-// catchKidsParam builds the comma-separated kid filter shared by the bottle
-// scan and the SSE subscription: live pool kids + self:<userId> (own sent
-// bottles) + reply:<parentId> for known thread bottles. With zero known
-// records we return "" — one bootstrap scan discovers everything.
+// catchKidsParam builds the kid set for the inbox scan and SSE subscription:
+// deposited pool keys + self:<userId> (own sent bottles). Reply kids are
+// deliberately excluded — replies are fetched lazily per thread via
+// fetchThreadChildren, so the pop-token kid set stays small and constant no
+// matter how many threads exist.
 async function catchKidsParam(): Promise<string> {
-  const metas = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
-  const knownIds = new Set<string>();
-  for (const r of metas) {
-    if ((r.id.startsWith("caught:") || r.id.startsWith("sent:")) && r.bottle?.id) {
-      knownIds.add(r.bottle.id);
-    }
-  }
-  // Every deposited key stays eligible: pool TTL only governs presence in
-  // the pool, not the validity of bottles already addressed to the key. A
-  // consumed or expired key can still be the target of an existing bottle,
-  // so it must remain in the kids filter or that bottle becomes invisible.
-  const liveKids = state.keys.filter((k) => k.depositedAt).map((k) => k.kid);
-  const parts: string[] = liveKids;
+  const parts = state.keys.filter((k) => k.depositedAt).map((k) => k.kid);
   const idt = await getIdentity().catch(() => null);
   if (!idt?.publicJwk) return "";
   parts.push(`${SELF_PREFIX}${await deriveUserId(idt.publicJwk)}`);
-  for (const bid of [...knownIds].slice(0, 120)) parts.push(`${REPLY_PREFIX}${bid}`);
   return parts.join(",");
 }
 
@@ -458,7 +447,10 @@ async function privateJwkForKid(kid: string): Promise<JWK | null> {
   return rec?.privateJwk ?? null;
 }
 
-let popCache: { kidsKey: string; token: string; exp: number; verified: Set<string> } | null = null;
+// popTokens caches one token per kid-set signature: the inbox set (pool +
+// self) and each lazily-fetched thread set (inbox kids + reply:<parentId>)
+// coexist without evicting each other.
+const popTokens = new Map<string, { token: string; exp: number; verified: Set<string> }>();
 const sharedBitsCache = new Map<string, ArrayBuffer>();
 
 async function popTokenFor(kids: string[]): Promise<string | null> {
@@ -469,13 +461,13 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
   // first bottle just landed, or a legacy key missing from the registry)
   // force a fresh proof round so their bottles aren't invisible for the
   // whole token lifetime.
+  const cached = popTokens.get(kidsKey);
   if (
-    popCache &&
-    popCache.kidsKey === kidsKey &&
-    popCache.exp > Date.now() &&
-    kids.every((k) => popCache!.verified.has(k))
+    cached &&
+    cached.exp > Date.now() &&
+    kids.every((k) => cached.verified.has(k))
   ) {
-    return popCache.token;
+    return cached.token;
   }
   const serverPub = await getServerPub();
   const proofs: Record<string, { ts: number; proof: string }> = {};
@@ -511,13 +503,140 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
     expiresIn?: number;
   }>("/api/auth/pop-token", { method: "POST", body: JSON.stringify({ kids, proofs }) });
   if (!token) return null;
-  popCache = {
-    kidsKey,
+  popTokens.set(kidsKey, {
     token,
     exp: Date.now() + ((expiresIn || 600) - 60) * 1000,
     verified: new Set(verifiedKids || []),
-  };
+  });
   return token;
+}
+
+// applyBottleStats persists the server's per-bottle reply aggregates
+// (childCount/lastChildAt) onto local records so the inbox can badge and
+// sort threads by reply activity without fetching children eagerly.
+async function applyBottleStats(bottle: Bottle) {
+  if (!bottle.lastChildAt && !bottle.childCount) return;
+  for (const prefix of ["caught:", "sent:"]) {
+    const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottle.id}`).catch(() => null);
+    if (!rec) continue;
+    if (bottle.childCount != null) rec.childCount = bottle.childCount;
+    if (bottle.lastChildAt) rec.lastChildAt = bottle.lastChildAt;
+    await idbPut(META_STORE, rec).catch(() => {});
+  }
+}
+
+// processBottle tries every envelope of a fetched bottle against our local
+// keys and stores the first successful decryption as a caught:/sent:
+// record. Returns true when a new record was written this session.
+async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Promise<boolean> {
+  if (caughtThisSession.has(bottle.id)) return false;
+  for (const envelope of bottle.envelopes || []) {
+    const isSelf = typeof envelope.kid === "string" && envelope.kid.startsWith(SELF_PREFIX);
+    let record = envelope.kid && !isSelf ? byKid.get(envelope.kid) : undefined;
+    if (!record && !isSelf && typeof envelope.kid === "string" && envelope.kid.startsWith(REPLY_PREFIX)) {
+      // stored reply keys (legacy/random) first, then deterministic derive
+      const replyRec = await idbGet<ThreadRecord>(META_STORE, envelope.kid).catch(() => null);
+      if (replyRec?.privateJwk) {
+        record = { privateJwk: replyRec.privateJwk } as KeyRecord;
+      } else {
+        const parentId = envelope.kid.slice(REPLY_PREFIX.length);
+        const idt = await getIdentity().catch(() => null);
+        if (idt?.privateJwk && parentId) {
+          const kp = await deriveReplyKeyPair(idt.privateJwk, parentId);
+          record = { privateJwk: kp.privateJwk } as KeyRecord;
+        }
+      }
+    }
+    let privJwk: JWK | undefined = record?.privateJwk;
+    if (isSelf) {
+      const id = await getIdentity().catch(() => null);
+      privJwk = id?.privateJwk;
+    }
+    if (!privJwk) continue;
+    try {
+      const rawSession = await unwrapSessionKey(bottle.id, envelope as Envelope, privJwk);
+      const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
+      if (isSelf) {
+        // Our own sent bottle: recover plaintext locally, no pickup claim.
+        await idbPut(META_STORE, {
+          id: `sent:${bottle.id}`,
+          bottle,
+          plain,
+          kid: envelope.kid,
+          claim: { status: "SENT" },
+          caughtAt: Date.now(),
+          repliesSeenAt: Date.now(),
+        }).catch(() => {});
+        caughtThisSession.add(bottle.id);
+        return true;
+      }
+      const { token: pickupToken } = await derivePickupProof(rawSession, bottle.id, envelope.kid || "");
+      let claim: Claim;
+      try {
+        claim = await claimBottle(bottle.id, envelope.kid || "", pickupToken);
+      } catch (e) {
+        claim = { ok: false, error: (e as Error).message };
+      }
+      await idbPut(META_STORE, {
+        id: `caught:${bottle.id}`,
+        bottle,
+        plain,
+        kid: envelope.kid,
+        claim,
+        caughtAt: Date.now(),
+      }).catch(() => {});
+      // note: reply keys are NOT burned at max depth — reply:<parentId>
+      // decrypts every reply addressed to that parent (all same depth),
+      // so sibling replies may still need it.
+      if (claim?.ok !== false) {
+        caughtThisSession.add(bottle.id);
+      }
+      log(
+        `caught bottle ${bottle.id.slice(0, 8)} (${claim?.status || claim?.error || "claimed"})`,
+        claim?.ok === false ? "warn" : ""
+      );
+      return true;
+    } catch {
+      // not ours or corrupted envelope; keep scanning
+    }
+  }
+  return false;
+}
+
+// fetchThreadChildren lazily loads direct replies to a bottle. The token
+// covers the inbox kid set plus reply:<parentId> — provable only when we
+// authored the parent, which is exactly the case where replies are ours to
+// read. Children we authored ourselves still match via self:<userId>.
+export async function fetchThreadChildren(parentId: string): Promise<number> {
+  const root = await catchKidsParam();
+  const kids = root ? root.split(",") : [];
+  kids.push(`${REPLY_PREFIX}${parentId}`);
+  const token = await popTokenFor(kids).catch(() => null);
+  if (!token) return 0;
+  const children = await fetchBottleChildren(parentId, token).catch(() => []);
+  const byKid = keyByKidMap();
+  let n = 0;
+  for (const b of children) {
+    await applyBottleStats(b);
+    if (await processBottle(b, byKid)) n++;
+  }
+  if (n) await renderInbox();
+  return n;
+}
+
+// openThread fetches unseen replies for a bottle and marks the thread as
+// seen so the new-activity badge clears.
+export async function openThread(bottleId: string) {
+  await fetchThreadChildren(bottleId).catch(() => {});
+  const seen = Date.now();
+  for (const prefix of ["caught:", "sent:"]) {
+    const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottleId}`).catch(() => null);
+    if (rec) {
+      rec.repliesSeenAt = seen;
+      await idbPut(META_STORE, rec).catch(() => {});
+    }
+  }
+  await renderInbox();
 }
 
 export async function checkBottles() {
@@ -527,7 +646,8 @@ export async function checkBottles() {
   const byKid = keyByKidMap();
 
   // Recipient filter: prove possession of our kids and get a pop token;
-  // the server only returns bottles addressed to kids we control.
+  // the server only returns bottles addressed to kids we control. The kid
+  // set is just pool keys + self — replies are fetched lazily per thread.
   const kidsParam = await catchKidsParam();
   const kids = kidsParam ? kidsParam.split(",") : [];
   const token = await popTokenFor(kids).catch((e) => {
@@ -547,81 +667,8 @@ export async function checkBottles() {
     if (!bottles.length) break;
     scanned += bottles.length;
     for (const bottle of bottles) {
-      if (caughtThisSession.has(bottle.id)) continue;
-      let claimed = false;
-      for (const envelope of bottle.envelopes || []) {
-        const isSelf = typeof envelope.kid === "string" && envelope.kid.startsWith(SELF_PREFIX);
-        let record = envelope.kid && !isSelf ? byKid.get(envelope.kid) : undefined;
-        if (!record && !isSelf && typeof envelope.kid === "string" && envelope.kid.startsWith(REPLY_PREFIX)) {
-          // stored reply keys (legacy/random) first, then deterministic derive
-          const replyRec = await idbGet<ThreadRecord>(META_STORE, envelope.kid).catch(() => null);
-          if (replyRec?.privateJwk) {
-            record = { privateJwk: replyRec.privateJwk } as KeyRecord;
-          } else {
-            const parentId = envelope.kid.slice(REPLY_PREFIX.length);
-            const idt = await getIdentity().catch(() => null);
-            if (idt?.privateJwk && parentId) {
-              const kp = await deriveReplyKeyPair(idt.privateJwk, parentId);
-              record = { privateJwk: kp.privateJwk } as KeyRecord;
-            }
-          }
-        }
-        let privJwk: JWK | undefined = record?.privateJwk;
-        if (isSelf) {
-          const id = await getIdentity().catch(() => null);
-          privJwk = id?.privateJwk;
-        }
-        if (!privJwk) continue;
-        try {
-          const rawSession = await unwrapSessionKey(bottle.id, envelope as Envelope, privJwk);
-          const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
-          if (isSelf) {
-            // Our own sent bottle: recover plaintext locally, no pickup claim.
-            await idbPut(META_STORE, {
-              id: `sent:${bottle.id}`,
-              bottle,
-              plain,
-              kid: envelope.kid,
-              claim: { status: "SENT" },
-              caughtAt: Date.now(),
-            }).catch(() => {});
-            caughtThisSession.add(bottle.id);
-            caught += 1;
-            break;
-          }
-          const { token: pickupToken } = await derivePickupProof(rawSession, bottle.id, envelope.kid || "");
-          let claim: Claim;
-          try {
-            claim = await claimBottle(bottle.id, envelope.kid || "", pickupToken);
-          } catch (e) {
-            claim = { ok: false, error: (e as Error).message };
-          }
-          await idbPut(META_STORE, {
-            id: `caught:${bottle.id}`,
-            bottle,
-            plain,
-            kid: envelope.kid,
-            claim,
-            caughtAt: Date.now(),
-          }).catch(() => {});
-          // note: reply keys are NOT burned at max depth — reply:<parentId>
-          // decrypts every reply addressed to that parent (all same depth),
-          // so sibling replies may still need it.
-          if (claim?.ok !== false) {
-            caughtThisSession.add(bottle.id);
-          }
-          caught += 1;
-          claimed = true;
-          log(
-            `caught bottle ${bottle.id.slice(0, 8)} (${claim?.status || claim?.error || "claimed"})`,
-            claim?.ok === false ? "warn" : ""
-          );
-          break;
-        } catch {
-          // not ours or corrupted envelope; keep scanning
-        }
-      }
-      void claimed;
+      await applyBottleStats(bottle);
+      if (await processBottle(bottle, byKid)) caught++;
     }
     if (!nextCursor || nextCursor === cursor) break;
     cursor = nextCursor;
@@ -684,10 +731,12 @@ export interface ThreadBundle {
   recs: ThreadRecord[];
 }
 
-// Stable ordering: prefer the sender-assigned bottle timestamp so re-fetches
-// (e.g. after vault import) reproduce the same order regardless of catch time.
+// Ordering: newest thread activity first — a root's position is driven by
+// its own timestamp or the latest reply the server reported (lastChildAt),
+// so threads with fresh replies float to the top like a messaging inbox.
+// bottle.createdAt and lastChildAt share the server's unix-second unit.
 function recOrderKey(r: ThreadRecord): number {
-  return r.bottle?.createdAt || r.caughtAt || 0;
+  return Math.max(r.bottle?.createdAt || 0, r.lastChildAt || 0);
 }
 
 export async function buildThreads(): Promise<ThreadBundle> {
@@ -700,13 +749,13 @@ export async function buildThreads(): Promise<ThreadBundle> {
         r.bottle &&
         r.plain
     )
-    .sort((a, b) => recOrderKey(a) - recOrderKey(b));
+    .sort((a, b) => recOrderKey(b) - recOrderKey(a));
   const byBottle = new Map<string, ThreadRecord>();
   for (const r of recs) {
     const prev = byBottle.get(r.bottle!.id);
     if (!prev || (isSentRecord(prev) && !isSentRecord(r))) byBottle.set(r.bottle!.id, r);
   }
-  const unique = [...byBottle.values()].sort((a, b) => recOrderKey(a) - recOrderKey(b));
+  const unique = [...byBottle.values()].sort((a, b) => recOrderKey(b) - recOrderKey(a));
   const byId = new Map(unique.map((r) => [r.bottle!.id, r]));
   const childrenOf = new Map<string, ThreadRecord[]>();
   const roots: ThreadRecord[] = [];
@@ -722,6 +771,11 @@ export async function buildThreads(): Promise<ThreadBundle> {
   for (const r of unique) caughtThisSession.add(r.bottle!.id);
   const sentIds = new Set(recs.filter(isSentRecord).map((r) => r.bottle!.id));
   void sentIds;
+  // Children render chronologically inside a thread even though roots are
+  // sorted by latest activity.
+  for (const list of childrenOf.values()) {
+    list.sort((a, b) => (a.bottle?.createdAt || 0) - (b.bottle?.createdAt || 0));
+  }
 
   const toNode = (r: ThreadRecord): ThreadNode => ({
     rec: r,
