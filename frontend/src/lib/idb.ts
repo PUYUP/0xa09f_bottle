@@ -64,6 +64,17 @@ export async function idbDelete(storeName: string, key: string): Promise<void> {
   });
 }
 
+export async function idbClear(storeName: string): Promise<void> {
+  const d = await ensureDB();
+  return new Promise((resolve, reject) => {
+    const t = d.transaction(storeName, "readwrite");
+    const req = t.objectStore(storeName).clear();
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+    t.onabort = () => reject(t.error);
+  });
+}
+
 export async function idbPut<T>(storeName: string, value: T, key?: string): Promise<unknown> {
   const d = await ensureDB();
   return new Promise((resolve, reject) => {

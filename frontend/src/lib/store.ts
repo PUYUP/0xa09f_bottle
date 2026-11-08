@@ -14,7 +14,7 @@ import {
   unwrapSessionKey,
   wrapSessionKey,
 } from "./crypto";
-import { idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
+import { idbClear, idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
 import { claimUsername, deriveUserId, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
@@ -898,6 +898,14 @@ export async function importVaultFile(file: File) {
     replies?: { id?: string; jwk?: JWK }[];
     meta?: ThreadRecord[];
   };
+  // Clean slate: wipe both stores before restoring so no stale keys,
+  // records, or reply material from the previous identity survives the
+  // import. Runs only after the vault decrypted successfully.
+  await idbClear(KEY_STORE);
+  await idbClear(META_STORE);
+  popTokens.clear();
+  sharedBitsCache.clear();
+  caughtThisSession.clear();
   let restored = 0;
 
   if (payload.version === 4) {
