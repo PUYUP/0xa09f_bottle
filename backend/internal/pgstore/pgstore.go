@@ -139,9 +139,12 @@ func (p *PGStore) SaveBottle(ctx context.Context, b store.Bottle) error {
 	if err != nil {
 		return err
 	}
-	kids, err := json.Marshal(b.DeliveredKids)
-	if err != nil {
-		return err
+	kidsJSON := []byte("[]")
+	if len(b.DeliveredKids) > 0 {
+		kidsJSON, err = json.Marshal(b.DeliveredKids)
+		if err != nil {
+			return err
+		}
 	}
 	_, err = p.pool.Exec(ctx, `
 INSERT INTO bottles (id, created_at, depth, parent_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids)
@@ -150,23 +153,29 @@ ON CONFLICT (id) DO UPDATE SET
   deliveries = GREATEST(bottles.deliveries, EXCLUDED.deliveries),
   status = CASE WHEN bottles.status = 'EXHAUSTED' OR EXCLUDED.status = 'EXHAUSTED' THEN 'EXHAUSTED' ELSE EXCLUDED.status END,
   delivered_kids = CASE
-    WHEN jsonb_array_length(EXCLUDED.delivered_kids) > jsonb_array_length(bottles.delivered_kids)
+    WHEN jsonb_typeof(EXCLUDED.delivered_kids) = 'array'
+     AND (jsonb_typeof(bottles.delivered_kids) <> 'array'
+          OR jsonb_array_length(EXCLUDED.delivered_kids) > jsonb_array_length(bottles.delivered_kids))
     THEN EXCLUDED.delivered_kids
     ELSE bottles.delivered_kids
   END`,
 		b.ID, b.CreatedAt, b.Depth, b.ParentID, b.MaxDeliveries, b.Deliveries, b.Status,
-		b.PayloadIV, b.Ciphertext, string(envelopes), string(kids))
+		b.PayloadIV, b.Ciphertext, string(envelopes), string(kidsJSON))
 	return err
 }
 
 func (p *PGStore) UpdateDelivery(ctx context.Context, id string, deliveries int, status string, deliveredKids []string) error {
-	kids, err := json.Marshal(deliveredKids)
-	if err != nil {
-		return err
+	kidsJSON := []byte("[]")
+	var err error
+	if len(deliveredKids) > 0 {
+		kidsJSON, err = json.Marshal(deliveredKids)
+		if err != nil {
+			return err
+		}
 	}
 	_, err = p.pool.Exec(ctx,
 		`UPDATE bottles SET deliveries = $2, status = $3, delivered_kids = $4 WHERE id = $1`,
-		id, deliveries, status, string(kids))
+		id, deliveries, status, string(kidsJSON))
 	return err
 }
 

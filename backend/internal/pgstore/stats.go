@@ -43,16 +43,21 @@ func (p *PGStore) UserStats(ctx context.Context, userID string) (UserStats, erro
 
 	// Received: bottles where at least one of our pool kids was delivered.
 	// Claims: total delivery events attributed to our kids.
+	// received_kids guard: legacy rows may hold jsonb 'null' instead of '[]'.
 	err = p.pool.QueryRow(ctx, `
 		SELECT
 		  count(DISTINCT b.id),
-		  (SELECT count(*) FROM bottles b2, jsonb_array_elements_text(b2.delivered_kids) d
-		   JOIN user_keys k ON k.user_id = $1 AND k.kid = d)
+		  (SELECT count(*) FROM bottles b2
+		   WHERE jsonb_typeof(b2.delivered_kids) = 'array'
+		     AND EXISTS (
+		       SELECT 1 FROM jsonb_array_elements_text(b2.delivered_kids) d
+		       JOIN user_keys k ON k.user_id = $1 AND k.kid = d))
 		FROM bottles b
-		WHERE EXISTS (
-		  SELECT 1 FROM user_keys k
-		  WHERE k.user_id = $1 AND b.delivered_kids ? k.kid
-		)`, userID).Scan(&st.Received, &st.Claims)
+		WHERE jsonb_typeof(b.delivered_kids) = 'array'
+		  AND EXISTS (
+		    SELECT 1 FROM user_keys k
+		    WHERE k.user_id = $1 AND b.delivered_kids ? k.kid
+		  )`, userID).Scan(&st.Received, &st.Claims)
 	if err != nil {
 		return st, err
 	}
