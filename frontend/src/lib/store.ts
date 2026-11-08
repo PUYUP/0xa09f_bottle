@@ -17,7 +17,7 @@ import {
   unwrapSessionKey,
   wrapSessionKey,
 } from "./crypto";
-import { idbClear, idbGet, idbGetAll, idbPut, KEY_STORE, META_STORE } from "./idb";
+import { idbClear, idbDelete, idbGet, idbGetAll, idbPut, KEY_STORE, KV_STORE, META_STORE } from "./idb";
 import { claimUsername, computeProof, deriveUserId, fetchNonce, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
@@ -161,17 +161,29 @@ async function syncAuthFields() {
 interface SyncRemoteRecord {
   key: string;
   blob: string;
+  updatedAt?: number; // server unix seconds
 }
 
 async function pullSyncRecords() {
   if (syncPulled) return;
   syncPulled = true;
+  // Delta pull: only records written after our last watermark. First pull
+  // (no cursor) fetches everything. A 1s overlap guards same-second writes.
+  const cursor = await idbGet<{ ts?: number }>(KV_STORE, "sync:cursor").catch(() => null);
+  const since = cursor?.ts ? Math.max(0, cursor.ts - 1) : 0;
   const auth = await syncAuthFields();
   const res = await api<{ records?: SyncRemoteRecord[] }>("/api/sync/records", {
     method: "POST",
-    body: JSON.stringify(auth),
+    body: JSON.stringify({ ...auth, since }),
   });
   const records = res?.records || [];
+  let maxUpdated = since;
+  for (const r of records) {
+    if (r.updatedAt && r.updatedAt > maxUpdated) maxUpdated = r.updatedAt;
+  }
+  if (records.length) {
+    await idbPut(KV_STORE, { id: "sync:cursor", ts: maxUpdated }).catch(() => {});
+  }
   if (!records.length) return;
   const id = await getIdentity();
   const meta = (await idbGetAll<ThreadRecord>(META_STORE).catch(() => [])) as ThreadRecord[];
@@ -857,6 +869,55 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
   return false;
 }
 
+// bumpThreadActivity propagates a bottle's activity timestamp to its parent
+// and thread-root records. Incremental scans only fetch new bottles, so the
+// root record is rarely re-listed — without this, replies at any depth would
+// never bump the root's threadLastAt and the unread badge would go stale.
+async function bumpThreadActivity(bottle: Bottle) {
+  const ts = bottle.createdAt || 0;
+  if (!ts) return;
+  const targets = new Set<string>();
+  if (bottle.parentId) targets.add(bottle.parentId);
+  if (bottle.rootId) {
+    targets.add(bottle.rootId);
+  } else if (bottle.parentId) {
+    // Legacy reply without rootId: walk up the parent chain via stored
+    // bottle records (bounded) to find the thread root.
+    let cur = bottle.parentId;
+    for (let hops = 0; cur && hops < 25; hops++) {
+      let next = "";
+      for (const prefix of ["caught:", "sent:"]) {
+        const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${cur}`).catch(() => null);
+        if (rec?.bottle?.rootId) {
+          targets.add(rec.bottle.rootId);
+          next = "";
+          break;
+        }
+        if (rec?.bottle?.parentId) next = rec.bottle.parentId;
+      }
+      if (!next) break;
+      targets.add(next);
+      cur = next;
+    }
+  }
+  for (const tid of targets) {
+    for (const prefix of ["caught:", "sent:"]) {
+      const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${tid}`).catch(() => null);
+      if (!rec) continue;
+      let dirty = false;
+      if (tid === bottle.parentId && (rec.lastChildAt || 0) < ts) {
+        rec.lastChildAt = ts;
+        dirty = true;
+      }
+      if ((rec.threadLastAt || 0) < ts) {
+        rec.threadLastAt = ts;
+        dirty = true;
+      }
+      if (dirty) await idbPut(META_STORE, rec).catch(() => {});
+    }
+  }
+}
+
 // fetchThreadChildren lazily loads direct replies to a bottle. The token
 // covers the inbox kid set plus reply:<parentId> — provable only when we
 // authored the parent, which is exactly the case where replies are ours to
@@ -870,42 +931,12 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
   const children = await fetchBottleChildren(parentId, token).catch(() => []);
   const byKid = keyByKidMap();
   let n = 0;
-  let maxChildAt = 0;
   for (const b of children) {
     await applyBottleStats(b);
-    if (b.createdAt && b.createdAt > maxChildAt) maxChildAt = b.createdAt;
+    await bumpThreadActivity(b);
     if (await processBottle(b, byKid)) n++;
   }
-  // Fresh replies should re-rank the thread immediately — bump activity
-  // timestamps from observed children instead of waiting for the next
-  // listing scan. threadLastAt drives root ordering; lastChildAt keeps
-  // direct-child lazy loading honest.
-  if (maxChildAt > 0) {
-    for (const prefix of ["caught:", "sent:"]) {
-      const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${parentId}`).catch(() => null);
-      if (rec) {
-        let dirty = false;
-        if ((rec.lastChildAt || 0) < maxChildAt) {
-          rec.lastChildAt = maxChildAt;
-          dirty = true;
-        }
-        if ((rec.threadLastAt || 0) < maxChildAt) {
-          rec.threadLastAt = maxChildAt;
-          dirty = true;
-        }
-        if (dirty) await idbPut(META_STORE, rec).catch(() => {});
-      }
-      const rootId = rec?.bottle?.rootId || parentId;
-      if (rootId !== parentId) {
-        const rootRec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${rootId}`).catch(() => null);
-        if (rootRec && (rootRec.threadLastAt || 0) < maxChildAt) {
-          rootRec.threadLastAt = maxChildAt;
-          await idbPut(META_STORE, rootRec).catch(() => {});
-        }
-      }
-    }
-  }
-  if (n || maxChildAt > 0) await renderInbox();
+  if (n) await renderInbox();
   return n;
 }
 
@@ -955,7 +986,17 @@ export async function checkBottles() {
     return;
   }
 
-  for (let page = 0; page < 100; page++) {
+  // Incremental scan: bottles arrive newest-first, so we only walk pages
+  // until we reach bottles older than the last scan's watermark (minus a
+  // small overlap for same-second arrivals). First run — or a cleared IDB —
+  // has no cursor and scans the full history once.
+  const SCAN_OVERLAP_SEC = 3;
+  const cursorRec = await idbGet<{ ca?: number }>(KV_STORE, "scan:cursor").catch(() => null);
+  const stopBefore = cursorRec?.ca ? cursorRec.ca - SCAN_OVERLAP_SEC : 0;
+  let maxSeen = cursorRec?.ca || 0;
+  let hitOld = false;
+
+  for (let page = 0; page < 100 && !hitOld; page++) {
     const { bottles = [], nextCursor = "" } = await api<{ bottles?: Bottle[]; nextCursor?: string }>(
       `/api/bottles?limit=100&token=${encodeURIComponent(token)}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
       { auth: false }
@@ -963,11 +1004,20 @@ export async function checkBottles() {
     if (!bottles.length) break;
     scanned += bottles.length;
     for (const bottle of bottles) {
+      if (stopBefore && bottle.createdAt < stopBefore) {
+        hitOld = true;
+        break;
+      }
+      if (bottle.createdAt > maxSeen) maxSeen = bottle.createdAt;
       await applyBottleStats(bottle);
+      await bumpThreadActivity(bottle);
       if (await processBottle(bottle, byKid)) caught++;
     }
-    if (!nextCursor || nextCursor === cursor) break;
+    if (hitOld || !nextCursor || nextCursor === cursor) break;
     cursor = nextCursor;
+  }
+  if (maxSeen > 0) {
+    await idbPut(KV_STORE, { id: "scan:cursor", ca: maxSeen }).catch(() => {});
   }
   await renderInbox();
   await refreshActivePoolKeys();
@@ -1215,6 +1265,7 @@ export async function importVaultFile(file: File) {
   syncPulled = false;
   syncReadAt.clear();
   syncDirty.clear();
+  await idbDelete(KV_STORE, "sync:cursor").catch(() => {});
   let restored = 0;
 
   if (payload.version === 4) {

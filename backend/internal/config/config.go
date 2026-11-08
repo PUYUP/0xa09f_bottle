@@ -16,6 +16,9 @@ type Config struct {
 	MaxBottles  int
 	DBMaxConns  int
 	DBMinConns  int
+	// BottleRetentionDays controls PG archive retention; 0 keeps bottles
+	// forever (default — user messages are never auto-deleted).
+	BottleRetentionDays int
 }
 
 func FromEnv() Config {
@@ -29,6 +32,7 @@ func FromEnv() Config {
 		MaxBottles:  intEnv("MAX_ACTIVE_BOTTLES", 500),
 		DBMaxConns:  intEnv("DB_MAX_CONNS", 25),
 		DBMinConns:  intEnv("DB_MIN_CONNS", 5),
+		BottleRetentionDays: intEnv("BOTTLE_RETENTION_DAYS", 0),
 	}
 }
 

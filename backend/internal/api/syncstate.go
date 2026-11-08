@@ -1,31 +1,27 @@
 package api
 
 import (
-	"errors"
 	"time"
 
 	"a09f/bottle/internal/keyauth"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/jackc/pgx/v5"
 )
 
-// syncStateRequest doubles as the auth envelope and the payload. When Blob
-// is empty the endpoint returns the stored blob; when set it upserts it.
-// Auth is the same nonce + proof-of-possession used at registration, so it
-// works for anonymous identities that never claimed a username.
-type syncStateRequest struct {
+// syncAuthRequest is the auth envelope shared by the sync endpoints. Auth is
+// the same nonce + proof-of-possession used at registration, so it works for
+// anonymous identities that never claimed a username.
+type syncAuthRequest struct {
 	PublicKey string `json:"publicKey"`
 	UserID    string `json:"userId"`
 	Ts        int64  `json:"ts"`
 	Nonce     string `json:"nonce"`
 	Proof     string `json:"proof"`
-	Blob      string `json:"blob,omitempty"`
 }
 
 // verifySyncAuth validates the identity proof and returns the canonical
 // user id derived from the presented public key.
-func (s *Server) verifySyncAuth(c fiber.Ctx, req *syncStateRequest) (string, error) {
+func (s *Server) verifySyncAuth(c fiber.Ctx, req *syncAuthRequest) (string, error) {
 	if s.pg == nil {
 		return "", fiber.NewError(fiber.StatusServiceUnavailable, "sync unavailable")
 	}
@@ -53,39 +49,10 @@ func (s *Server) verifySyncAuth(c fiber.Ctx, req *syncStateRequest) (string, err
 	return userID, nil
 }
 
-// syncState stores/returns the client's encrypted state blob. The server
-// only ever sees ciphertext it cannot decrypt.
-func (s *Server) syncState(c fiber.Ctx) error {
-	var req syncStateRequest
-	if err := bindJSON(c, &req); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
-	}
-	userID, err := s.verifySyncAuth(c, &req)
-	if err != nil {
-		return err
-	}
-	if req.Blob == "" {
-		blob, updated, err := s.pg.GetSyncState(c.Context(), userID)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return c.JSON(fiber.Map{})
-		}
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "lookup failed")
-		}
-		return c.JSON(fiber.Map{"blob": blob, "updatedAt": updated})
-	}
-	if len(req.Blob) > 256*1024 {
-		return fiber.NewError(fiber.StatusBadRequest, "blob too large")
-	}
-	if err := s.pg.PutSyncState(c.Context(), userID, req.Blob); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "save failed")
-	}
-	return c.JSON(fiber.Map{"ok": true})
-}
-
 type syncRecordEntry struct {
-	Key  string `json:"key"`
-	Blob string `json:"blob"`
+	Key       string `json:"key"`
+	Blob      string `json:"blob"`
+	UpdatedAt int64  `json:"updatedAt,omitempty"`
 }
 
 type syncRecordsRequest struct {
@@ -95,18 +62,20 @@ type syncRecordsRequest struct {
 	Nonce     string            `json:"nonce"`
 	Proof     string            `json:"proof"`
 	Records   []syncRecordEntry `json:"records,omitempty"`
+	Since     int64             `json:"since,omitempty"`
 }
 
-// syncRecords is the per-record variant of syncState: clients push deltas
-// of encrypted fields and pull the full set once per session. record_key is
-// a client-computed salted hash and blob is ciphertext — the server learns
-// only how many fields exist and when they were last written.
+// syncRecords is the encrypted per-record sync endpoint: clients push deltas
+// of encrypted fields and pull them back (optionally only those updated
+// after `since`). record_key is a client-computed salted hash and blob is
+// ciphertext — the server learns only how many fields exist and when they
+// were last written.
 func (s *Server) syncRecords(c fiber.Ctx) error {
 	var req syncRecordsRequest
 	if err := bindJSON(c, &req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
 	}
-	auth := syncStateRequest{
+	auth := syncAuthRequest{
 		PublicKey: req.PublicKey,
 		UserID:    req.UserID,
 		Ts:        req.Ts,
@@ -118,13 +87,13 @@ func (s *Server) syncRecords(c fiber.Ctx) error {
 		return err
 	}
 	if len(req.Records) == 0 {
-		recs, err := s.pg.ListSyncRecords(c.Context(), userID, 0)
+		recs, err := s.pg.ListSyncRecords(c.Context(), userID, req.Since)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "lookup failed")
 		}
 		out := make([]syncRecordEntry, 0, len(recs))
 		for _, r := range recs {
-			out = append(out, syncRecordEntry{Key: r.Key, Blob: r.Blob})
+			out = append(out, syncRecordEntry{Key: r.Key, Blob: r.Blob, UpdatedAt: r.UpdatedAt})
 		}
 		return c.JSON(fiber.Map{"records": out})
 	}

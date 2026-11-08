@@ -1022,3 +1022,38 @@ func (s *Store) Pickup(ctx context.Context, id, kid, tokenHash string) (PickupRe
 	}
 	return result, nil
 }
+
+// ---------- Postgres write outbox ----------
+// When SaveBottle fails beyond the inline retry budget, the serialized
+// bottle is parked in a Redis list so a background worker can drain it once
+// Postgres recovers — closing the gap where a long PG outage plus Redis TTL
+// expiry would lose the bottle entirely. Capped at 10k entries; beyond that
+// oldest entries are dropped (loudly logged by the worker on unmarshal
+// failures is not possible here, so the cap is the safety valve).
+
+const pgOutboxKey = "a09f:pg:outbox"
+const pgOutboxMax = 10000
+
+func (s *Store) PGOutboxPush(ctx context.Context, raw string) error {
+	pipe := s.rdb.Pipeline()
+	pipe.LPush(ctx, pgOutboxKey, raw)
+	pipe.LTrim(ctx, pgOutboxKey, 0, pgOutboxMax-1)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// PGOutboxPop blocks up to timeout for the oldest outbox entry (RPOP =
+// oldest, since pushes LPUSH to the head). Returns redis.Nil on timeout.
+func (s *Store) PGOutboxPop(ctx context.Context, timeout time.Duration) (string, error) {
+	res, err := s.rdb.BRPop(ctx, timeout, pgOutboxKey).Result()
+	if err == redis.Nil {
+		return "", redis.Nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if len(res) < 2 {
+		return "", errors.New("empty outbox entry")
+	}
+	return res[1], nil
+}

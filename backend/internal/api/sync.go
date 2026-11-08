@@ -2,10 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"time"
 
 	"a09f/bottle/internal/store"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // syncBottlePG writes through to Postgres synchronously; on failure it
@@ -30,7 +33,61 @@ func (s *Server) retryBottlePG(bottle store.Bottle) {
 				return
 			}
 		}
-		log.Printf("pg sync gave up for bottle %s (reconciler will backfill if still active)", bottle.ID)
+		// Out of retry budget: park the bottle in the Redis outbox so the
+		// worker can persist it whenever Postgres comes back. Without this a
+		// long outage plus Redis TTL expiry loses the bottle permanently.
+		raw, err := json.Marshal(bottle)
+		if err != nil {
+			log.Printf("pg sync gave up for bottle %s (unmarshalable)", bottle.ID)
+			return
+		}
+		if err := s.store.PGOutboxPush(context.Background(), string(raw)); err != nil {
+			log.Printf("pg outbox push %s: %v", bottle.ID, err)
+		} else {
+			log.Printf("pg sync parked bottle %s in outbox", bottle.ID)
+		}
+	}()
+}
+
+// pgOutboxWorker drains the Redis outbox into Postgres. SaveBottle is an
+// upsert, so replays after partial drains are idempotent.
+func (s *Server) pgOutboxWorker(ctx context.Context) {
+	if s.pg == nil {
+		return
+	}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			raw, err := s.store.PGOutboxPop(ctx, 5*time.Second)
+			if err == redis.Nil {
+				continue
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("pg outbox pop: %v", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+			var b store.Bottle
+			if err := json.Unmarshal([]byte(raw), &b); err != nil {
+				log.Printf("pg outbox bad entry dropped: %v", err)
+				continue
+			}
+			if err := s.pg.SaveBottle(ctx, b); err != nil {
+				log.Printf("pg outbox save %s: %v", b.ID, err)
+				// Put it back and back off — the head-of-line entry blocks
+				// the queue, which is fine: ordering is preserved and PG is
+				// presumably still down.
+				_ = s.store.PGOutboxPush(context.Background(), raw)
+				time.Sleep(15 * time.Second)
+			}
+		}
 	}()
 }
 
@@ -68,6 +125,36 @@ func (s *Server) pgReconciler(ctx context.Context) {
 			_ = s.pg.AdvisoryUnlock(context.Background(), reconcilerLockID)
 		}
 	}
+}
+
+const retentionLockID int64 = 90902
+
+// retentionWorker runs the PG retention prune once a day under an advisory
+// lock so only one replica does it.
+func (s *Server) retentionWorker(ctx context.Context) {
+	go func() {
+		// First pass shortly after boot, then daily.
+		timer := time.NewTimer(2 * time.Minute)
+		defer timer.Stop()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			case <-ticker.C:
+			}
+			acquired, err := s.pg.TryAdvisoryLock(context.Background(), retentionLockID)
+			if err != nil || !acquired {
+				continue
+			}
+			if err := s.pg.RunRetention(context.Background(), s.cfg.BottleRetentionDays); err != nil {
+				log.Printf("pg retention: %v", err)
+			}
+			_ = s.pg.AdvisoryUnlock(context.Background(), retentionLockID)
+		}
+	}()
 }
 
 func (s *Server) reconcileOnce() {

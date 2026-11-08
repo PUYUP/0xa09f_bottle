@@ -33,6 +33,8 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	if pg != nil {
 		go s.rebuildPool(ctx)
 		go s.pgReconciler(ctx)
+		go s.pgOutboxWorker(ctx)
+		go s.retentionWorker(ctx)
 	}
 	app := fiber.New(fiber.Config{
 		BodyLimit: 4 * 1024 * 1024,
@@ -109,7 +111,6 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Post("/api/users/:id/block", userLimiter, s.blockUser)
 	app.Delete("/api/users/:id/block", userLimiter, s.unblockUser)
 	app.Get("/api/me/blocks", s.listBlocks)
-	app.Post("/api/sync/state", userLimiter, s.syncState)
 	app.Post("/api/sync/records", userLimiter, s.syncRecords)
 	app.Post("/api/users/:id/report", userLimiter, s.reportUser)
 

@@ -32,6 +32,24 @@ CREATE INDEX IF NOT EXISTS bottles_parent_id_idx ON bottles (parent_id) WHERE pa
 ALTER TABLE bottles ADD COLUMN IF NOT EXISTS root_id TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS bottles_root_id_idx ON bottles (root_id) WHERE root_id <> '';
 
+-- Materialized thread-activity counters living on the thread-key row
+-- (root_id, or parent_id for legacy replies without root_id). Maintained
+-- incrementally by SaveBottle so listings read O(1) counters instead of
+-- scanning every reply in the corpus.
+ALTER TABLE bottles ADD COLUMN IF NOT EXISTS thread_replies BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE bottles ADD COLUMN IF NOT EXISTS thread_last_at BIGINT NOT NULL DEFAULT 0;
+-- Backfill: recompute absolute counters from children. Idempotent — the
+-- WHERE clause skips rows already in sync, and the counts match what the
+-- incremental path produces.
+UPDATE bottles r SET thread_replies = s.cnt, thread_last_at = s.lastat
+FROM (
+  SELECT COALESCE(NULLIF(root_id, ''), parent_id) AS tk, COUNT(*) AS cnt, MAX(created_at) AS lastat
+  FROM bottles
+  WHERE parent_id <> ''
+  GROUP BY 1
+) s
+WHERE r.id = s.tk AND (r.thread_replies <> s.cnt OR r.thread_last_at <> s.lastat);
+
 -- One row per envelope kid: the index behind "bottles involving me"
 -- queries (recipient pool kids, self:<userId> sender marker, reply:<id>).
 CREATE TABLE IF NOT EXISTS bottle_kids (
@@ -116,19 +134,10 @@ CREATE TABLE IF NOT EXISTS reported_bottles (
 );
 CREATE INDEX IF NOT EXISTS reported_bottles_created_idx ON reported_bottles (created_at DESC);
 
--- user_sync_state stores an opaque, client-encrypted state blob per identity
--- (read receipts, UI dismissals). The server never sees the contents.
-CREATE TABLE IF NOT EXISTS user_sync_state (
-  user_id     TEXT PRIMARY KEY,
-  blob        TEXT NOT NULL,
-  updated_at  BIGINT NOT NULL
-);
-
--- user_sync_records is the per-record variant: one row per synced field
--- (read:<recordId>, dismiss:<kid>) so clients can push deltas instead of
--- rewriting a monolithic blob. record_key and blob are both opaque to the
--- server — keys reference identifiers it already knows, values are
--- client-side ciphertext.
+-- user_sync_records stores per-field encrypted sync entries (read
+-- receipts, UI dismissals). record_key is a client-computed salted hash
+-- and blob is ciphertext — the server learns only how many fields exist
+-- and when they were last written.
 CREATE TABLE IF NOT EXISTS user_sync_records (
   user_id    TEXT NOT NULL,
   record_key TEXT NOT NULL,
@@ -240,6 +249,30 @@ func (p *PGStore) SaveBottle(ctx context.Context, b store.Bottle) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// Thread counters bump only when the bottle is new or its created_at
+	// changed — re-saves (reconciler, outbox replays) must not double count.
+	var prevCreatedAt int64
+	isNewReply := false
+	if b.ParentID != "" {
+		tk := b.RootID
+		if tk == "" {
+			tk = b.ParentID
+		}
+		err := tx.QueryRow(ctx, `SELECT created_at FROM bottles WHERE id = $1`, b.ID).Scan(&prevCreatedAt)
+		if err == pgx.ErrNoRows || (err == nil && prevCreatedAt != b.CreatedAt) {
+			isNewReply = true
+		}
+		if err != nil && err != pgx.ErrNoRows {
+			return err
+		}
+		if isNewReply {
+			if _, err := tx.Exec(ctx, `
+UPDATE bottles SET thread_replies = thread_replies + 1, thread_last_at = GREATEST(thread_last_at, $2)
+WHERE id = $1`, tk, b.CreatedAt); err != nil {
+				return err
+			}
+		}
+	}
 	_, err = tx.Exec(ctx, `
 INSERT INTO bottles (id, created_at, depth, parent_id, root_id, max_deliveries, deliveries, status, payload_iv, ciphertext, envelopes, delivered_kids)
 VALUES ($1,$2,$3,$4,$12,$5,$6,$7,$8,$9,$10,$11)
@@ -433,27 +466,37 @@ SELECT pubkey FROM (
 	return pubs, rows.Err()
 }
 
-// GetSyncState returns the stored opaque blob for a user, if any.
-func (p *PGStore) GetSyncState(ctx context.Context, userID string) (string, int64, error) {
-	var blob string
-	var updated int64
-	err := p.pool.QueryRow(ctx,
-		`SELECT blob, updated_at FROM user_sync_state WHERE user_id = $1`, userID,
-	).Scan(&blob, &updated)
-	if err != nil {
-		return "", 0, err
+// RunRetention prunes operational tables that grow unboundedly. User-facing
+// data (bottles) is only deleted when bottleRetentionDays > 0 — the default
+// keeps the archive forever.
+func (p *PGStore) RunRetention(ctx context.Context, bottleRetentionDays int) error {
+	now := time.Now().Unix()
+	// Pool key registry: rows expired >90d ago are useless for status,
+	// rebuilds, and consumption tracking.
+	if _, err := p.pool.Exec(ctx,
+		`DELETE FROM key_registry WHERE expires_at > 0 AND expires_at < $1`,
+		now-90*86400); err != nil {
+		return fmt.Errorf("retention key_registry: %w", err)
 	}
-	return blob, updated, nil
-}
-
-// PutSyncState upserts the opaque blob for a user.
-func (p *PGStore) PutSyncState(ctx context.Context, userID, blob string) error {
-	_, err := p.pool.Exec(ctx, `
-INSERT INTO user_sync_state (user_id, blob, updated_at)
-VALUES ($1, $2, $3)
-ON CONFLICT (user_id) DO UPDATE SET blob = EXCLUDED.blob, updated_at = EXCLUDED.updated_at`,
-		userID, blob, time.Now().Unix())
-	return err
+	// Encrypted sync records idle >180d.
+	if _, err := p.pool.Exec(ctx,
+		`DELETE FROM user_sync_records WHERE updated_at < $1`,
+		now-180*86400); err != nil {
+		return fmt.Errorf("retention user_sync_records: %w", err)
+	}
+	if bottleRetentionDays > 0 {
+		cutoff := now - int64(bottleRetentionDays)*86400
+		// bottle_kids cascades; reported_bottles has no FK — drop orphans.
+		if _, err := p.pool.Exec(ctx,
+			`DELETE FROM reported_bottles WHERE bottle_id NOT IN (SELECT id FROM bottles)`); err != nil {
+			return fmt.Errorf("retention reported_bottles: %w", err)
+		}
+		if _, err := p.pool.Exec(ctx,
+			`DELETE FROM bottles WHERE created_at < $1`, cutoff); err != nil {
+			return fmt.Errorf("retention bottles: %w", err)
+		}
+	}
+	return nil
 }
 
 // SyncRecord is one encrypted per-field sync entry.
@@ -658,34 +701,26 @@ GROUP BY parent_id`, ids)
 }
 
 // ThreadStats returns per-thread reply aggregates keyed by the thread's root
-// bottle id: total descendant replies and the newest one's created_at.
-// Replies group by root_id; legacy replies without root_id fall back to
-// their direct parent so old threads still aggregate one level deep.
+// bottle id, read from the materialized counters maintained by SaveBottle —
+// O(threads) index lookups instead of scanning every reply in the corpus.
 func (p *PGStore) ThreadStats(ctx context.Context, rootIDs []string) (map[string][2]int64, error) {
 	out := make(map[string][2]int64, len(rootIDs))
 	if len(rootIDs) == 0 {
 		return out, nil
 	}
 	rows, err := p.pool.Query(ctx, `
-SELECT tk, COUNT(*)::bigint, COALESCE(MAX(created_at), 0)
-FROM (
-  SELECT COALESCE(NULLIF(root_id, ''), parent_id) AS tk, created_at
-  FROM bottles
-  WHERE parent_id <> ''
-) t
-WHERE tk = ANY($1::text[])
-GROUP BY tk`, rootIDs)
+SELECT id, thread_replies, thread_last_at FROM bottles WHERE id = ANY($1::text[])`, rootIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var root string
+		var id string
 		var count, last int64
-		if err := rows.Scan(&root, &count, &last); err != nil {
+		if err := rows.Scan(&id, &count, &last); err != nil {
 			return nil, err
 		}
-		out[root] = [2]int64{count, last}
+		out[id] = [2]int64{count, last}
 	}
 	return out, rows.Err()
 }

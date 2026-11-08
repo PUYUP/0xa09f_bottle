@@ -1,7 +1,8 @@
 const DB_NAME = "a09f";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const KEY_STORE = "keys";
 const META_STORE = "meta";
+const KV_STORE = "kv";
 
 let db: IDBDatabase | null = null;
 
@@ -12,6 +13,7 @@ function openDB(): Promise<IDBDatabase> {
       const d = req.result;
       if (!d.objectStoreNames.contains(KEY_STORE)) d.createObjectStore(KEY_STORE, { keyPath: "kid" });
       if (!d.objectStoreNames.contains(META_STORE)) d.createObjectStore(META_STORE, { keyPath: "id" });
+      if (!d.objectStoreNames.contains(KV_STORE)) d.createObjectStore(KV_STORE, { keyPath: "id" });
     };
     req.onsuccess = () => {
       const d = req.result;
@@ -91,4 +93,4 @@ export async function idbPut<T>(storeName: string, value: T, key?: string): Prom
   });
 }
 
-export { KEY_STORE, META_STORE };
+export { KEY_STORE, META_STORE, KV_STORE };
