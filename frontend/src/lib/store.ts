@@ -84,7 +84,7 @@ export function log(msg: string, cls: LogEntry["cls"] = "") {
     msg,
     cls,
   };
-  setState({ logs: [...state.logs.slice(-199), entry] });
+  setState({ logs: [entry, ...state.logs.slice(0, 199)] });
 }
 
 // ---------- keys ----------

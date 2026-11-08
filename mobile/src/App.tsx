@@ -282,7 +282,7 @@ export default function App() {
         {/* system log */}
         {state.logs.length > 0 && (
           <IonList inset>
-            {state.logs.slice(-5).map((l) => (
+            {state.logs.slice(0, 5).map((l) => (
               <IonItem key={l.id} lines="none" className="ion-no-padding">
                 <IonNote>
                   [{l.time}] {l.msg}
