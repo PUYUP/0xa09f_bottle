@@ -291,6 +291,15 @@ export default function App() {
                       {claim?.deliveries ?? "?"}/{bottle?.maxDeliveries} ·{" "}
                       {(bottle?.id || "").slice(0, 8)}
                       {depth > 0 && " ↳"}
+                      {(() => {
+                        const total = node.rec.childCount || 0;
+                        const loaded = node.children.length;
+                        if (total > loaded)
+                          return <span style={{ color: "#1a5276" }}> · 💬 {total} repl{total === 1 ? "y" : "ies"} ▸</span>;
+                        if (loaded > 0)
+                          return <span style={{ color: "#1a5276" }}> · 💬 {loaded} repl{loaded === 1 ? "y" : "ies"}</span>;
+                        return null;
+                      })()}
                       {hasNewReplies && (
                         <span style={{ color: "#c0392b", fontWeight: 700 }}> ● new</span>
                       )}

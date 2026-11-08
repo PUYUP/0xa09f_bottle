@@ -18,6 +18,17 @@ function MessageNode({
   const isSent = claim?.status === "SENT";
   const canReply =
     !!plain?.reply && depth < MAX_THREAD_DEPTH && !isSent && !sentIds.has(bottle!.id);
+  // Reply indicator: server-reported direct-child count vs what's loaded
+  // locally — "▸" means replies exist but haven't been fetched yet (tap the
+  // message to load them lazily).
+  const childTotal = node.rec.childCount || 0;
+  const childLoaded = node.children.length;
+  const replyTag =
+    childTotal > childLoaded
+      ? ` · 💬 ${childTotal} repl${childTotal === 1 ? "y" : "ies"} ▸`
+      : childLoaded > 0
+        ? ` · 💬 ${childLoaded} repl${childLoaded === 1 ? "y" : "ies"}`
+        : "";
 
   return (
     <div
@@ -30,6 +41,7 @@ function MessageNode({
         {claim?.status || "CLAIMED"} · {claim?.deliveries ?? "?"}/{bottle!.maxDeliveries} · depth{" "}
         {depth}/{MAX_THREAD_DEPTH} · key {(kid || "").slice(0, 8)}
         {isSent && " · (yours)"}
+        {replyTag && <span className="text-blue-800">{replyTag}</span>}
       </div>
       <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{plain!.text}</p>
       <div className="mt-1 text-[13px]">
