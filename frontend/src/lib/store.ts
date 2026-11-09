@@ -732,9 +732,17 @@ async function privateJwkForKid(kid: string): Promise<JWK | null> {
     const stored = await idbGet<ThreadRecord>(META_STORE, kid).catch(() => null);
     if (stored?.privateJwk) return stored.privateJwk;
     const idt = await getIdentity().catch(() => null);
-    if (!idt?.privateJwk || !parentId) return null;
-    const kp = await deriveReplyKeyPair(idt.privateJwk, parentId);
-    return kp.privateJwk;
+    if (!idt?.privateJwk || !parentId) {
+      log(`pop proof: no identity for ${kid.slice(0, 24)}`, "warn");
+      return null;
+    }
+    try {
+      const kp = await deriveReplyKeyPair(idt.privateJwk, parentId);
+      return kp.privateJwk;
+    } catch (e) {
+      log(`pop proof: reply key derive failed for ${kid.slice(0, 24)}: ${(e as Error).message}`, "warn");
+      return null;
+    }
   }
   const rec = state.keys.find((k) => k.kid === kid);
   return rec?.privateJwk ?? null;
@@ -806,8 +814,8 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
           }
           const ts = Math.floor(Date.now() / 1000);
           proofs[kid] = { ts, proof: await kidProofDigest(shared, kid, ts) };
-        } catch {
-          // unprovable kid — server will simply not verify it
+        } catch (e) {
+          log(`pop proof: crypto failed for ${kid.slice(0, 24)}: ${(e as Error).message}`, "warn");
         }
       })
     );
