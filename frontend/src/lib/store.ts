@@ -1133,6 +1133,14 @@ async function bumpThreadActivity(bottle: Bottle) {
 // authored the parent, which is exactly the case where replies are ours to
 // read. Children we authored ourselves still match via self:<userId>.
 export async function fetchThreadChildren(parentId: string): Promise<number> {
+  // Replies to a bottle are wrapped to the reply key of whoever AUTHORED
+  // that bottle. If we only caught it, its children are unreadable by
+  // design — skip the token round-trip entirely.
+  const caughtRec = await idbGet<ThreadRecord>(META_STORE, `caught:${parentId}`).catch(() => null);
+  if (caughtRec) {
+    log(`thread ${parentId.slice(0, 8)}: replies belong to the author — skipped`, "");
+    return 0;
+  }
   const root = await catchKidsParam();
   const kids = root ? root.split(",") : [];
   kids.push(`${REPLY_PREFIX}${parentId}`);
