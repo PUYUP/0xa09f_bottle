@@ -1060,7 +1060,10 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
   const kids = root ? root.split(",") : [];
   kids.push(`${REPLY_PREFIX}${parentId}`);
   const token = await popTokenFor(kids).catch(() => null);
-  if (!token) return 0;
+  if (!token) {
+    log(`thread ${parentId.slice(0, 8)}: no pop token — replies not provable`, "warn");
+    return 0;
+  }
   const children = await fetchBottleChildren(parentId, token).catch(() => []);
   const byKid = keyByKidMap();
   let n = 0;
@@ -1068,6 +1071,11 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
     await applyBottleStats(b);
     await bumpThreadActivity(b);
     if (await processBottle(b, byKid)) n++;
+  }
+  if (children.length && !n) {
+    log(`thread ${parentId.slice(0, 8)}: ${children.length} bottle(s) fetched but none decrypted`, "warn");
+  } else {
+    log(`thread ${parentId.slice(0, 8)}: ${n}/${children.length} repl${children.length === 1 ? "y" : "ies"} loaded`);
   }
   if (n) await renderInbox();
   return n;
