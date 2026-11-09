@@ -20,8 +20,14 @@
     "@capacitor/cli": "^6.1.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.3",
+    "@vitejs/plugin-react": "^6.2.1",
     "typescript": "^5.9.2",
-    "vite": "^5.4.10"
+    "vite": "^8.3.6"
+  },
+  "overrides": {
+    "tar": "^7.5.22",
+    "rimraf": "^6.1.4",
+    "glob": "^14.0.4",
+    "minimatch": "^11.0.5"
   }
 }

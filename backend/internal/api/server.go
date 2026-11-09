@@ -42,7 +42,14 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 		go s.retentionWorker(ctx)
 	}
 	app := fiber.New(fiber.Config{
-		BodyLimit: 4 * 1024 * 1024,
+		BodyLimit:   4 * 1024 * 1024,
+		ProxyHeader: fiber.HeaderXForwardedFor,
+		// The backend binds to 127.0.0.1 — only the local nginx reaches it.
+		// Trusting loopback proxies lets c.IP() resolve the real client IP
+		// from X-Forwarded-For (rightmost untrusted entry) so per-IP rate
+		// limits key on the actual client. Direct/external connections keep
+		// their TCP peer IP and cannot spoof XFF.
+		TrustProxyConfig: fiber.TrustProxyConfig{Loopback: true},
 	})
 
 	app.Use(logger.New())

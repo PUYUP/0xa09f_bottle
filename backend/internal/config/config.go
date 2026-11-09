@@ -26,15 +26,15 @@ type Config struct {
 
 func FromEnv() Config {
 	return Config{
-		Addr:        env("ADDR", ":8080"),
-		RedisURL:    env("REDIS_URL", "redis://localhost:6379/0"),
-		DatabaseURL: env("DATABASE_URL", ""),
-		PoolTTL:     durationHours("POOL_TTL_HOURS", 24),
-		BottleTTL:   durationHours("BOTTLE_TTL_HOURS", 24*7),
-		MaxPool:     intEnv("MAX_POOL_KEYS", 10000),
-		MaxBottles:  intEnv("MAX_ACTIVE_BOTTLES", 500),
-		DBMaxConns:  intEnv("DB_MAX_CONNS", 25),
-		DBMinConns:  intEnv("DB_MIN_CONNS", 5),
+		Addr:                env("ADDR", ":8080"),
+		RedisURL:            env("REDIS_URL", "redis://localhost:6379/0"),
+		DatabaseURL:         env("DATABASE_URL", ""),
+		PoolTTL:             durationHours("POOL_TTL_HOURS", 24),
+		BottleTTL:           durationHours("BOTTLE_TTL_HOURS", 24*7),
+		MaxPool:             intEnv("MAX_POOL_KEYS", 10000),
+		MaxBottles:          intEnv("MAX_ACTIVE_BOTTLES", 500),
+		DBMaxConns:          intEnv("DB_MAX_CONNS", 25),
+		DBMinConns:          intEnv("DB_MIN_CONNS", 5),
 		BottleRetentionDays: intEnv("BOTTLE_RETENTION_DAYS", 0),
 		MetricsToken:        os.Getenv("METRICS_TOKEN"),
 	}

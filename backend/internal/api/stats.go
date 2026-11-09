@@ -1,24 +1,14 @@
 package api
 
 import (
-	"strings"
-
 	"github.com/gofiber/fiber/v3"
 )
 
-// clientIP echoes the requester's IP as seen by the server (proxy-aware).
-// Used by clients to display their own network metadata.
+// clientIP echoes the requester's IP as seen by the server. c.IP() is
+// proxy-aware (loopback-trusted X-Forwarded-For) so the value reflects the
+// real client and cannot be spoofed by request headers.
 func (s *Server) clientIP(c fiber.Ctx) error {
-	ip := c.Get("X-Real-IP")
-	if ip == "" {
-		if xff := c.Get("X-Forwarded-For"); xff != "" {
-			ip = strings.TrimSpace(strings.Split(xff, ",")[0])
-		}
-	}
-	if ip == "" {
-		ip = c.IP()
-	}
-	return c.JSON(fiber.Map{"ip": ip})
+	return c.JSON(fiber.Map{"ip": c.IP()})
 }
 
 // meStats returns server-computed activity stats for the authenticated user.
