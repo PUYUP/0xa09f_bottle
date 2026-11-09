@@ -13,6 +13,7 @@ function MessageNode({
   onOpen?: (node: ThreadNode) => void;
 }) {
   const { bottle, plain, kid, claim } = node.rec;
+  const deleted = !!node.rec.deleted;
   const depth = bottle!.depth || 1;
   const isReply = !!bottle!.parentId;
   const isSent = claim?.status === "SENT";
@@ -43,7 +44,12 @@ function MessageNode({
         {isSent && " · (yours)"}
         {replyTag && <span className="text-blue-800">{replyTag}</span>}
       </div>
-      <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{plain!.text}</p>
+      {deleted ? (
+        <p className="text-[15px] italic text-neutral-500">[this message was deleted]</p>
+      ) : (
+        <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{plain!.text}</p>
+      )}
+      {!deleted && (
       <div className="mt-1 text-[13px]">
         {isSent && (
           <span
@@ -84,6 +90,7 @@ function MessageNode({
           </>
         )}
       </div>
+      )}
     </div>
   );
 }

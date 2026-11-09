@@ -4,6 +4,7 @@ import { getIdentityRecord, randomUsername as genName } from "../lib/identity";
 import {
   blockOrReportUser,
   claimUsernameUI,
+  changeUsernameUI,
   deleteAccount,
   exportVault,
   fetchMyStats,
@@ -266,6 +267,25 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
             <i>anonymous — claim a username to enable blocking, reporting &amp; stats</i>
           )}
         </div>
+        {identity?.username ? (
+          <div className="flex gap-2">
+            <input
+              className="retro-input flex-1"
+              placeholder="new username (once every 7 days)"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+            <button className="retro-btn" onClick={() => setUsername(genName())} title="random username">
+              ⚄
+            </button>
+            <button
+              className="retro-btn"
+              onClick={() => changeUsernameUI(username).catch((e) => log(`rename: ${(e as Error).message}`, "err"))}
+            >
+              rename
+            </button>
+          </div>
+        ) : (
         <div className="flex gap-2">
           <input
             className="retro-input flex-1"
@@ -283,6 +303,7 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
             claim
           </button>
         </div>
+        )}
         {identity?.username && (
           <>
             <div className="flex gap-2">

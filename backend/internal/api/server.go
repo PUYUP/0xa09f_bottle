@@ -84,6 +84,13 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 			return fiber.NewError(fiber.StatusTooManyRequests, "nonce rate limit exceeded")
 		},
 	})
+	reportLimiter := limiter.New(limiter.Config{
+		Max:        10,
+		Expiration: 1 * time.Minute,
+		LimitReached: func(c fiber.Ctx) error {
+			return fiber.NewError(fiber.StatusTooManyRequests, "report rate limit exceeded")
+		},
+	})
 
 	app.Get("/api/health", s.health)
 	app.Get("/api/ip", s.clientIP)
@@ -99,13 +106,14 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Get("/api/bottles/:id/children", s.listBottleChildren)
 	app.Get("/api/events", s.streamEvents)
 	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
-	app.Post("/api/bottles/:id/report", bottleLimiter, s.reportBottle)
+	app.Post("/api/bottles/:id/report", reportLimiter, s.reportBottle)
 	app.Delete("/api/bottles/:id", userLimiter, s.deleteBottle)
 	app.Get("/api/auth/server-key", s.serverKey)
 	app.Post("/api/auth/nonce", nonceLimiter, s.issueNonce)
 	app.Post("/api/auth/pop-token", nonceLimiter, s.popToken)
 	app.Post("/api/users", userLimiter, s.registerUser)
 	app.Get("/api/me", s.me)
+	app.Post("/api/me/username", userLimiter, s.changeUsername)
 	app.Delete("/api/me", userLimiter, s.deleteMe)
 	app.Get("/api/me/stats", s.meStats)
 	app.Get("/api/users/by-username/:username", s.getUserByUsername)
@@ -114,7 +122,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Delete("/api/users/:id/block", userLimiter, s.unblockUser)
 	app.Get("/api/me/blocks", s.listBlocks)
 	app.Post("/api/sync/records", userLimiter, s.syncRecords)
-	app.Post("/api/users/:id/report", userLimiter, s.reportUser)
+	app.Post("/api/users/:id/report", reportLimiter, s.reportUser)
 
 	app.Use(s.serveStatic)
 	return app

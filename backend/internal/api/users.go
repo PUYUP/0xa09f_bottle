@@ -127,6 +127,47 @@ func publicUser(u pgstore.User) fiber.Map {
 	return fiber.Map{"id": u.ID, "username": u.Username, "createdAt": u.CreatedAt}
 }
 
+type changeUsernameRequest struct {
+	Username string `json:"username"`
+}
+
+// changeUsername renames the authenticated user. PoP headers required;
+// server enforces a cooldown between changes.
+func (s *Server) changeUsername(c fiber.Ctx) error {
+	user, err := s.requireAuth(c)
+	if err != nil {
+		return err
+	}
+	var req changeUsernameRequest
+	if err := bindJSON(c, &req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	if !usernameRe.MatchString(req.Username) {
+		return fiber.NewError(fiber.StatusBadRequest, "username must be 3-32 chars of [a-zA-Z0-9_.-]")
+	}
+	if strings.EqualFold(req.Username, user.Username) {
+		return c.JSON(fiber.Map{"user": publicUser(user)})
+	}
+	if err := s.pg.ChangeUsername(c.Context(), user.ID, req.Username); err != nil {
+		switch {
+		case errors.Is(err, pgstore.ErrTaken):
+			return fiber.NewError(fiber.StatusConflict, "username taken")
+		case errors.Is(err, pgstore.ErrCooldown):
+			return fiber.NewError(fiber.StatusTooManyRequests, "username can be changed once every 7 days")
+		case errors.Is(err, pgstore.ErrNotFound):
+			return fiber.NewError(fiber.StatusNotFound, "user not found")
+		default:
+			return fiber.NewError(fiber.StatusInternalServerError, "update failed")
+		}
+	}
+	updated, err := s.pg.GetUserByID(c.Context(), user.ID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "lookup failed")
+	}
+	return c.JSON(fiber.Map{"user": publicUser(updated)})
+}
+
 // deleteMe permanently removes the authenticated user's account: identity,
 // username, key ownership, blocks, reports they filed, and encrypted sync
 // records. Encrypted bottles are untouched — the server cannot read them
@@ -278,7 +319,7 @@ func (s *Server) reportUser(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid json")
 	}
 	req.Reason = strings.TrimSpace(req.Reason)
-	if len(req.Reason) > 1000 {
+	if len(req.Reason) > 280 {
 		return fiber.NewError(fiber.StatusBadRequest, "reason too long")
 	}
 	if err := s.pg.ReportUser(c.Context(), user.ID, target, req.Reason); err != nil {

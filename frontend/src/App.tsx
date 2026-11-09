@@ -166,13 +166,24 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [threadLimit, setThreadLimit] = useState(10);
   const [detailPath, setDetailPath] = useState<string[]>([]);
+  const [catchToast, setCatchToast] = useState(false);
   const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>> | null>(null);
   const [busy, setBusy] = useState(false);
+  const autoBaited = useRef(false);
 
   useEffect(() => {
     init().catch((e) => log(`boot: ${(e as Error).message}`, "err"));
     getIdentity().then(setIdentity).catch(() => {});
   }, []);
+
+  // New-catch toast: an SSE bottle event means something landed on our
+  // bait — flash a banner for a few seconds.
+  useEffect(() => {
+    if (!state.lastCatchAt) return;
+    setCatchToast(true);
+    const t = setTimeout(() => setCatchToast(false), 6000);
+    return () => clearTimeout(t);
+  }, [state.lastCatchAt]);
 
   useEffect(() => {
     let alive = true;
@@ -191,6 +202,20 @@ export default function App() {
 
   const ttlValid = readTTLSeconds(baitTtl);
   const isNewUser = state.keys.length === 0 && !identity?.username;
+
+  // Onboarding: a brand-new user (just claimed a username, zero keys) gets
+  // three starter baits cast automatically so catches are possible without
+  // figuring out the throw-bait flow first.
+  useEffect(() => {
+    if (autoBaited.current || !state.ready || state.keys.length > 0 || !identity?.username) return;
+    autoBaited.current = true;
+    (async () => {
+      for (let i = 0; i < 3; i++) {
+        await generateAndDeposit("86400").catch(() => {});
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.ready, state.keys.length, identity?.username]);
 
   // Mandatory username: once the identity record exists, the app stays
   // locked behind the claim screen until a username is set.
@@ -301,6 +326,21 @@ export default function App() {
           <VaultButtons />
         </div>
       </div>
+
+      {catchToast && (
+        <div
+          className="bevel fixed bottom-4 left-1/2 z-50 w-[24rem] max-w-[90vw] cursor-pointer"
+          onClick={() => {
+            setCatchToast(false);
+            run(checkBottles);
+          }}
+        >
+          <div className="retro-titlebar">
+            <span>🎣 something bit!</span>
+            <span className="text-[12px]">tap to check catch</span>
+          </div>
+        </div>
+      )}
 
       {/* ── composer ───────────────────────────────────────── */}
       <div className="bevel mb-2">
@@ -424,25 +464,28 @@ export default function App() {
                   end-to-end encryption — nobody, not even the server, can read what you write.
                   Only the sender and the intended recipient ever see the plaintext.
                 </p>
-                <p className="mb-2">To start catching, throw some bait:</p>
+                <p className="mb-2">
+                  We've already cast <b>3 starter bait</b> for you — they're in the water
+                  now. To start catching:
+                </p>
                 <ol className="mb-3 list-decimal pl-6">
                   <li>
                     <span className="retro-link" onClick={openBaitDialog}>
-                      🎣 throw bait
+                      🎣 throw more bait
                     </span>{" "}
-                    — generate a keypair and publish the public half into the bait pool
-                  </li>
-                  <li>
-                    <span className="retro-link" onClick={() => setPage("account")}>
-                      👤 claim a username
-                    </span>{" "}
-                    — needed for blocking &amp; reporting
+                    — generate extra keys to widen your catch surface
                   </li>
                   <li>
                     <span className="retro-link" onClick={() => run(checkBottles)}>
                       🪝 check catch
                     </span>{" "}
                     — scan the sea for catches addressed to your bait
+                  </li>
+                  <li>
+                    <span className="retro-link" onClick={() => setPage("account")}>
+                      👤 claim a username
+                    </span>{" "}
+                    — needed for blocking &amp; reporting
                   </li>
                 </ol>
                 <p className="text-neutral-600">
@@ -501,7 +544,11 @@ export default function App() {
                     </span>
                   )}
                 </div>
-                <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{r.rec.plain?.text}</p>
+                {r.rec.deleted ? (
+                  <p className="text-[15px] italic text-neutral-500">[this message was deleted]</p>
+                ) : (
+                  <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{r.rec.plain?.text}</p>
+                )}
               </div>
             );
           })}

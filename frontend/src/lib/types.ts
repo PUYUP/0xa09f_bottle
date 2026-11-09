@@ -80,6 +80,9 @@ export interface ThreadRecord {
   threadLastAt?: number;
   repliesSeenAt?: number;
   readAt?: number;
+  // set when the author deleted the bottle server-side: the record stays as
+  // a placeholder ("[message deleted]") with plaintext stripped locally.
+  deleted?: boolean;
   privateJwk?: JWK;
   publicJwk?: JWK;
   createdAt?: number;

@@ -49,6 +49,9 @@ export interface AppState {
   blocks: BlockEntry[] | null;
   records: ThreadRecord[];
   logs: LogEntry[];
+  // unix ms of the most recent SSE bottle event — drives the "something
+  // bit" toast. 0 until the first event this session.
+  lastCatchAt: number;
 }
 
 let state: AppState = {
@@ -61,6 +64,7 @@ let state: AppState = {
   blocks: null,
   records: [],
   logs: [],
+  lastCatchAt: 0,
 };
 
 const listeners = new Set<() => void>();
@@ -631,9 +635,24 @@ export async function dismissEatenBait(kid: string) {
   markSyncDirty(`bait:${kid}`);
 }
 
+// markBottleDeleted turns local records into placeholders: plaintext is
+// stripped (crypto-shredded locally too) but the record stays so threads
+// show "[message deleted]" instead of silently vanishing.
+async function markBottleDeleted(bottleId: string) {
+  for (const prefix of ["caught:", "sent:"]) {
+    const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottleId}`).catch(() => null);
+    if (!rec || rec.deleted) continue;
+    delete rec.plain;
+    rec.deleted = true;
+    await idbPut(META_STORE, rec).catch(() => {});
+  }
+  await renderInbox();
+}
+
 // deleteBottle removes the author's own message server-side (crypto-shredded
-// tombstone) and drops the local records. Only bottles we sent can be
-// deleted — authorship is enforced server-side via the self:<uid> marker.
+// tombstone) and marks local records as deleted placeholders. Only bottles
+// we sent can be deleted — authorship is enforced server-side via the
+// self:<uid> marker.
 export async function deleteBottle(bottleId: string) {
   if (!window.confirm("delete this message for everyone?")) return;
   try {
@@ -642,14 +661,30 @@ export async function deleteBottle(bottleId: string) {
     log(`delete failed: ${(e as Error).message}`, "warn");
     return;
   }
-  await idbDelete(META_STORE, `sent:${bottleId}`).catch(() => {});
-  await idbDelete(META_STORE, `caught:${bottleId}`).catch(() => {});
-  await renderInbox();
+  await markBottleDeleted(bottleId);
   log(`deleted bottle ${bottleId.slice(0, 8)}`);
 }
 
+const REPORT_CATEGORIES = [
+  "spam",
+  "harassment",
+  "hate speech",
+  "illegal content",
+  "impersonation",
+  "other",
+];
+
+function askReportReason(): string {
+  const hint = `report category — ${REPORT_CATEGORIES.join(", ")}\n(add details after a dash, e.g. "spam — crypto scam")`;
+  const raw = (window.prompt(hint) || "").trim();
+  if (!raw) return "other";
+  const first = raw.split(/[\s—-]/)[0].toLowerCase();
+  const cat = REPORT_CATEGORIES.find((c) => c === first || c.startsWith(first) || first.startsWith(c.split(" ")[0]));
+  return cat ? raw.slice(0, 280) : `other — ${raw}`.slice(0, 280);
+}
+
 export async function reportBottle(bottleId: string) {
-  const reason = window.prompt("report reason (optional)") || "";
+  const reason = askReportReason();
   await api(`/api/bottles/${encodeURIComponent(bottleId)}/report`, {
     method: "POST",
     body: JSON.stringify({ reason }),
@@ -846,8 +881,7 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
   // Tombstoned bottles propagate through listings so clients drop local
   // copies even if they missed the SSE delete event.
   if (bottle.status === "DELETED") {
-    await idbDelete(META_STORE, `caught:${bottle.id}`).catch(() => {});
-    await idbDelete(META_STORE, `sent:${bottle.id}`).catch(() => {});
+    await markBottleDeleted(bottle.id);
     return false;
   }
   // Already decrypted locally? Skip the ECDH unwrap + AES-GCM decrypt +
@@ -1161,22 +1195,19 @@ export async function connectEvents() {
   try {
     eventsSource = new EventSource(url);
     eventsSource.addEventListener("bottle", (ev) => {
-      // Payload is {"id":..., "deleted":bool}; deletions remove local
-      // records directly instead of waiting for a scan that may never
-      // surface the tombstone incrementally.
+      // Payload is {"id":..., "deleted":bool}; deletions mark local
+      // records as placeholders instead of waiting for a scan that may
+      // never surface the tombstone incrementally.
       try {
         const data = JSON.parse((ev as MessageEvent).data || "{}") as { id?: string; deleted?: boolean };
         if (data.deleted && data.id) {
-          void (async () => {
-            await idbDelete(META_STORE, `caught:${data.id}`).catch(() => {});
-            await idbDelete(META_STORE, `sent:${data.id}`).catch(() => {});
-            await renderInbox();
-          })();
+          void markBottleDeleted(data.id);
           return;
         }
       } catch {
         // fall through to scan
       }
+      setState({ lastCatchAt: Date.now() });
       scheduleCatchScan();
     });
   } catch {
@@ -1732,6 +1763,24 @@ export async function claimUsernameUI(username: string) {
   log(`claimed @${username}`);
 }
 
+// changeUsernameUI renames the account (server enforces a 7-day cooldown)
+// and updates the local identity record so the UI reflects it instantly.
+export async function changeUsernameUI(username: string) {
+  const v = username.trim();
+  if (!v) return;
+  const res = await api<{ user?: { username?: string } }>("/api/me/username", {
+    method: "POST",
+    body: JSON.stringify({ username: v }),
+  });
+  const id = await getIdentity();
+  if (id && res?.user?.username) {
+    id.username = res.user.username; // mutates the cached record in place
+    await idbPut(META_STORE, id).catch(() => {});
+    setState({}); // notify subscribers so panels re-read the identity record
+  }
+  log(`username changed to @${res?.user?.username || v}`);
+}
+
 // deleteAccount permanently removes the server-side account (username,
 // identity, key ownership, blocks, reports, sync records) then wipes all
 // local data and reloads into a fresh anonymous state. Encrypted bottles
@@ -1767,7 +1816,7 @@ export async function blockOrReportUser(kind: "block" | "report", targetInput: s
     });
     log(`blocked ${target.slice(0, 12)}… — their keys won't receive your bottles`);
   } else {
-    const reason = window.prompt("report reason (optional)") || "";
+    const reason = askReportReason();
     await api(`/api/users/${encodeURIComponent(target)}/report`, {
       method: "POST",
       body: JSON.stringify({ reason }),

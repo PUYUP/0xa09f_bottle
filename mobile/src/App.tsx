@@ -31,6 +31,7 @@ import {
   reportBottle,
   deleteBottle,
   deleteAccount,
+  changeUsernameUI,
   exportVault,
   importVaultFile,
   readTTLSeconds,
@@ -65,6 +66,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [identity, setIdentity] = useState<IdentityRecord | null>(null);
   const [claimName, setClaimName] = useState("");
+  const [catchToast, setCatchToast] = useState(false);
+  const autoBaited = useRef(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const gateFileRef = useRef<HTMLInputElement>(null);
 
@@ -82,6 +85,26 @@ export default function App() {
     buildThreads().then((t) => setThreads(t.roots)).catch(() => {});
     return () => clearInterval(iv);
   }, []);
+
+  // Onboarding: brand-new users get three starter baits cast automatically.
+  useEffect(() => {
+    if (autoBaited.current || !state.ready || state.keys.length > 0 || !identity?.username) return;
+    autoBaited.current = true;
+    (async () => {
+      for (let i = 0; i < 3; i++) {
+        await generateAndDeposit("86400").catch(() => {});
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.ready, state.keys.length, identity?.username]);
+
+  // New-catch toast: an SSE bottle event means something landed on our bait.
+  useEffect(() => {
+    if (!state.lastCatchAt) return;
+    setCatchToast(true);
+    const t = setTimeout(() => setCatchToast(false), 6000);
+    return () => clearTimeout(t);
+  }, [state.lastCatchAt]);
 
   const rows: Row[] = [];
   for (const r of threads) flatten(r, 0, rows);
@@ -310,6 +333,21 @@ export default function App() {
           {identity?.username && (
             <IonButton
               size="small"
+              fill="outline"
+              onClick={() => {
+                const v = window.prompt("new username (once every 7 days)", identity.username || "");
+                if (!v?.trim()) return;
+                changeUsernameUI(v.trim())
+                  .then(() => getIdentity().then(setIdentity))
+                  .catch((e) => log(`rename: ${(e as Error).message}`, "err"));
+              }}
+            >
+              rename
+            </IonButton>
+          )}
+          {identity?.username && (
+            <IonButton
+              size="small"
               fill="clear"
               color="danger"
               onClick={() => {
@@ -358,7 +396,13 @@ export default function App() {
               >
                 <IonLabel>
                   <div style={{ paddingLeft: depth * 16 }}>
-                    <p style={{ margin: "4px 0", whiteSpace: "pre-wrap" }}>{plain?.text}</p>
+                    {node.rec.deleted ? (
+                      <p style={{ margin: "4px 0", fontStyle: "italic", color: "var(--ion-color-medium)" }}>
+                        [this message was deleted]
+                      </p>
+                    ) : (
+                      <p style={{ margin: "4px 0", whiteSpace: "pre-wrap" }}>{plain?.text}</p>
+                    )}
                     <IonNote>
                       {isSent ? "yours" : claim?.status || "CLAIMED"} ·{" "}
                       {claim?.deliveries ?? "?"}/{bottle?.maxDeliveries} ·{" "}
@@ -377,7 +421,7 @@ export default function App() {
                         <span style={{ color: "#c0392b", fontWeight: 700 }}> ● new</span>
                       )}
                     </IonNote>
-                    {!isSent && (
+                    {!isSent && !node.rec.deleted && (
                       <div style={{ marginTop: 4, display: "flex", gap: 12 }}>
                         {canReply && (
                           <IonButton
@@ -403,7 +447,7 @@ export default function App() {
                         </IonButton>
                       </div>
                     )}
-                    {isSent && bottle && (
+                    {isSent && bottle && !node.rec.deleted && (
                       <div style={{ marginTop: 4 }}>
                         <IonButton
                           size="small"
@@ -518,6 +562,31 @@ export default function App() {
           {legal === "terms" ? <TermsContent /> : legal === "privacy" ? <PrivacyContent /> : <HowItWorksContent />}
         </IonContent>
       </IonModal>
+
+      {catchToast && (
+        <div
+          onClick={() => {
+            setCatchToast(false);
+            run(checkBottles);
+          }}
+          style={{
+            position: "fixed",
+            bottom: 90,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 9999,
+            background: "var(--ion-color-primary)",
+            color: "#fff",
+            padding: "10px 18px",
+            borderRadius: 20,
+            fontSize: 14,
+            boxShadow: "0 4px 12px rgba(0,0,0,.3)",
+            cursor: "pointer",
+          }}
+        >
+          🎣 something bit! — tap to check catch
+        </div>
+      )}
 
       <IonFooter>
         <IonToolbar>

@@ -609,7 +609,7 @@ func (s *Server) reportBottle(c fiber.Ctx) error {
 		}
 	}
 	req.Reason = strings.TrimSpace(req.Reason)
-	if len(req.Reason) > 1000 {
+	if len(req.Reason) > 280 {
 		return fiber.NewError(fiber.StatusBadRequest, "reason too long")
 	}
 	exists := false
