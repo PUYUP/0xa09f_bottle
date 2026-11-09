@@ -232,6 +232,7 @@ export default function App() {
   const [threads, setThreads] = useState<ThreadNode[]>([]);
   const [threadLimit, setThreadLimit] = useState(10);
   const [detailPath, setDetailPath] = useState<string[]>([]);
+  const [threadLoads, setThreadLoads] = useState(0);
   const [catchToast, setCatchToast] = useState(false);
   const [vaultDue, setVaultDue] = useState(false);
   const [billing, setBilling] = useState<Entitlement | null>(null);
@@ -367,6 +368,15 @@ export default function App() {
     fn()
       .catch((e) => log(`${(e as Error).message}`, "err"))
       .finally(() => setBusy(false));
+  };
+
+  // openThread is fire-and-forget but we track in-flight loads so the UI
+  // can show a spinner instead of looking "empty" while replies fetch.
+  const loadThread = (bottleId: string) => {
+    setThreadLoads((n) => n + 1);
+    openThread(bottleId)
+      .catch(() => {})
+      .finally(() => setThreadLoads((n) => Math.max(0, n - 1)));
   };
 
   return (
@@ -610,7 +620,7 @@ export default function App() {
           {!detailNode && (
             <BaitLine
               onOpen={(bottleId) => {
-                openThread(bottleId).catch(() => {});
+                loadThread(bottleId);
                 setDetailPath([bottleId]);
               }}
             />
@@ -631,16 +641,20 @@ export default function App() {
               ))}
             </div>
           )}
+          {detailNode && threadLoads > 0 && (
+            <div className="mb-2 text-[13px] text-neutral-600">⏳ loading replies…</div>
+          )}
           {detailNode ? (
             <ThreadList
               roots={[detailNode]}
+              busy={threadLoads > 0}
               onOpen={(n) => {
                 const id = n.rec.bottle?.id;
                 if (!id) return;
                 // Always (re)fetch this node's children — clicking the node
                 // that is already the detail root must still lazy-load its
                 // replies, otherwise the "💬 N ▸" tag is a dead end.
-                openThread(id).catch(() => {});
+                loadThread(id);
                 if (id !== detailPath[detailPath.length - 1]) {
                   setDetailPath((p) => [...p, id]);
                 }
@@ -729,7 +743,7 @@ export default function App() {
                 className={`msg bevel-in clickable${isSent ? " sent" : ""}`}
                 onClick={() => {
                   if (!bottleId) return;
-                  openThread(bottleId).catch(() => {});
+                  loadThread(bottleId);
                   setDetailPath([bottleId]);
                 }}
               >

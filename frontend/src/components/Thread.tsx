@@ -8,10 +8,12 @@ function MessageNode({
   node,
   sentIds,
   onOpen,
+  busy,
 }: {
   node: ThreadNode;
   sentIds: Set<string>;
   onOpen?: (node: ThreadNode) => void;
+  busy?: boolean;
 }) {
   const { bottle, plain, kid, claim } = node.rec;
   const [replying, setReplying] = useState(false);
@@ -29,7 +31,7 @@ function MessageNode({
   const childLoaded = node.children.length;
   const replyTag =
     childTotal > childLoaded
-      ? ` · 💬 ${childTotal} repl${childTotal === 1 ? "y" : "ies"} ▸`
+      ? ` · 💬 ${childTotal} repl${childTotal === 1 ? "y" : "ies"} ▸${busy ? " ⏳" : ""}`
       : childLoaded > 0
         ? ` · 💬 ${childLoaded} repl${childLoaded === 1 ? "y" : "ies"}`
         : "";
@@ -151,10 +153,12 @@ function TreeChildren({
   node,
   sentIds,
   onOpen,
+  busy,
 }: {
   node: ThreadNode;
   sentIds: Set<string>;
   onOpen?: (node: ThreadNode) => void;
+  busy?: boolean;
 }) {
   if (!node.children.length) return null;
   return (
@@ -162,7 +166,7 @@ function TreeChildren({
       {node.children.map((c, i) => (
         <div key={c.rec.id} className={`tree-child${i === node.children.length - 1 ? " last" : ""}`}>
           <span className="tree-glyph">{i === node.children.length - 1 ? "└─" : "├─"}</span>
-          <Thread node={c} sentIds={sentIds} onOpen={onOpen} />
+          <Thread node={c} sentIds={sentIds} onOpen={onOpen} busy={busy} />
         </div>
       ))}
     </div>
@@ -173,15 +177,17 @@ function Thread({
   node,
   sentIds,
   onOpen,
+  busy,
 }: {
   node: ThreadNode;
   sentIds: Set<string>;
   onOpen?: (node: ThreadNode) => void;
+  busy?: boolean;
 }) {
   return (
     <div>
-      <MessageNode node={node} sentIds={sentIds} onOpen={onOpen} />
-      <TreeChildren node={node} sentIds={sentIds} onOpen={onOpen} />
+      <MessageNode node={node} sentIds={sentIds} onOpen={onOpen} busy={busy} />
+      <TreeChildren node={node} sentIds={sentIds} onOpen={onOpen} busy={busy} />
     </div>
   );
 }
@@ -204,9 +210,11 @@ export function findNode(roots: ThreadNode[], bottleId: string): ThreadNode | nu
 export function ThreadList({
   roots,
   onOpen,
+  busy,
 }: {
   roots: ThreadNode[];
   onOpen?: (node: ThreadNode) => void;
+  busy?: boolean;
 }) {
   const { records } = useApp();
   const sentIds = new Set(
@@ -216,7 +224,7 @@ export function ThreadList({
     <>
       {roots.map((r) => (
         <div key={r.rec.id} className="mb-3">
-          <Thread node={r} sentIds={sentIds} onOpen={onOpen} />
+          <Thread node={r} sentIds={sentIds} onOpen={onOpen} busy={busy} />
         </div>
       ))}
     </>
