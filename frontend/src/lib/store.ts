@@ -800,6 +800,13 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
     if (!toProve.length) {
       toProve.push(kids.find((k) => k.startsWith(SELF_PREFIX)) ?? kids[0]);
     }
+    // Always prove self:<userId> when present: the server only merges the
+    // remembered popset into the issued token when a self: kid verifies in
+    // the SAME request. Without it a reply-only proof round issues a token
+    // covering just that kid, and the next round's popset merge silently
+    // drops it — children then filter out our own replies.
+    const selfToProve = kids.find((k) => k.startsWith(SELF_PREFIX));
+    if (selfToProve && !toProve.includes(selfToProve)) toProve.push(selfToProve);
     if (toProve.some((k) => k.startsWith(REPLY_PREFIX))) {
       log(`pop proof: attempt=${attempt} toProve=${toProve.length} replyKids=[${toProve.filter((k) => k.startsWith(REPLY_PREFIX)).join(",")}]`, "warn");
     }
