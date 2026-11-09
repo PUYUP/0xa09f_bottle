@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>a09f — status</title>
+<style>
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    background: #c0c0c0;
+    background-image:
+      linear-gradient(#d4d0c8 1px, transparent 1px),
+      linear-gradient(90deg, #d4d0c8 1px, transparent 1px);
+    background-size: 24px 24px;
+    font-family: Georgia, "Times New Roman", serif;
+    color: #000;
+    padding: 48px 16px;
+  }
+  .box {
+    width: min(560px, 94vw);
+    border: 2px solid;
+    border-color: #fff #808080 #808080 #fff;
+    background: #c0c0c0;
+  }
+  .titlebar {
+    background: linear-gradient(90deg, #000080, #1084d0);
+    color: #fff;
+    font-weight: bold;
+    padding: 4px 8px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .body { padding: 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: #444; font-size: 13px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td { padding: 6px 4px; border-bottom: 1px solid #a0a0a0; vertical-align: top; }
+  td:first-child { color: #333; width: 45%; }
+  .ok { color: #0a6b0a; font-weight: bold; }
+  .bad { color: #a00; font-weight: bold; }
+  .muted { color: #555; }
+  .alerts { margin-top: 14px; font-size: 13px; }
+  .alerts div { padding: 4px 0; }
+  a { color: #0000ee; }
+  #refresh { font-size: 12px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="titlebar"><span>a09f — relay status</span><span id="clock"></span></div>
+  <div class="body">
+    <h1 id="headline">checking the water…</h1>
+    <div class="sub" id="sub">fetching health &amp; metrics</div>
+    <table id="rows"></table>
+    <div class="alerts" id="alerts"></div>
+    <div id="refresh" class="muted">auto-refreshes every 30s · <a href="/">back to a09f</a></div>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function j(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error(r.status);
+  return r.json();
+}
+
+function row(k, v, cls) {
+  return `<tr><td>${esc(k)}</td><td class="${cls || ""}">${esc(v)}</td></tr>`;
+}
+
+async function tick() {
+  $("clock").textContent = new Date().toUTCString().slice(17, 25) + " UTC";
+  const rows = [];
+  let allOk = true;
+  let metrics = null;
+
+  try {
+    const live = await j("/api/health/live");
+    rows.push(row("service", live.status === "alive" ? "alive" : live.status, live.status === "alive" ? "ok" : "bad"));
+  } catch {
+    rows.push(row("service", "unreachable", "bad"));
+    allOk = false;
+  }
+
+  try {
+    const ready = await j("/api/health/ready");
+    const ok = ready.status === "ready";
+    if (!ok) allOk = false;
+    rows.push(row("readiness", ok ? "ready" : (ready.error || "not ready"), ok ? "ok" : "bad"));
+    rows.push(row("redis", ready.redis || "?", ready.redis === "ok" ? "ok" : "bad"));
+    rows.push(row("postgres", ready.pg ? "connected" : "disabled", "muted"));
+  } catch (e) {
+    rows.push(row("readiness", "check failed", "bad"));
+    allOk = false;
+  }
+
+  try {
+    metrics = await j("/api/metrics");
+  } catch {
+    rows.push(row("metrics", "protected (token required)", "muted"));
+  }
+
+  if (metrics) {
+    const g = metrics.gauges || {};
+    rows.push(row("pool keys", g.poolKeys ?? "?"));
+    rows.push(row("pg outbox depth", g.outboxDepth ?? "?", g.outboxDepth > 100 ? "bad" : ""));
+    rows.push(row("uptime", Math.round((metrics.uptimeSec || 0) / 60) + " min"));
+    const deps = metrics.deps || {};
+    for (const k of Object.keys(deps)) {
+      rows.push(row("dep: " + k, deps[k] ? "up" : "DOWN", deps[k] ? "ok" : "bad"));
+      if (!deps[k]) allOk = false;
+    }
+    const alerts = metrics.alerts || [];
+    $("alerts").innerHTML = alerts.length
+      ? alerts.map((a) => `<div class="bad">⚠ ${esc(a)}</div>`).join("")
+      : `<div class="ok">no active alerts</div>`;
+  } else {
+    $("alerts").innerHTML = "";
+  }
+
+  $("headline").textContent = allOk ? "all systems go" : "degraded";
+  $("headline").className = allOk ? "ok" : "bad";
+  $("sub").textContent = "last checked " + new Date().toLocaleTimeString();
+  $("rows").innerHTML = rows.join("");
+}
+
+tick();
+setInterval(tick, 30000);
+</script>
+</body>
+</html>

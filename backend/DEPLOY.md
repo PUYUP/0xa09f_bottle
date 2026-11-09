@@ -59,6 +59,16 @@ Verifikasi: `curl https://relay.a09f.com/api/health`
 tanpa token endpoint mengembalikan 401. Cocok di-poll oleh uptime monitor
 atau diekspor ke Prometheus via exporter sederhana.
 
+Status publik: `https://relay.a09f.com/status` — health, readiness, gauges
+dan alerts dalam satu halaman (auto-refresh 30s).
+
+Error reporting opsional via Sentry:
+
+- Backend: set `SENTRY_DSN` di `.env.production` — panic per-request
+  ditangkap middleware dan dilaporkan.
+- Frontend: set `VITE_SENTRY_DSN` saat build Vercel — error React/API
+  client-side dilaporkan. Kosongkan untuk menonaktifkan.
+
 ## Update berikutnya
 
 ```bash

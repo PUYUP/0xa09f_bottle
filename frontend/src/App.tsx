@@ -16,6 +16,9 @@ import {
   openThread,
   readTTLSeconds,
   importVaultFile,
+  exportVault,
+  vaultReminderState,
+  snoozeVaultReminder,
 } from "./lib/store";
 import { getIdentity, randomUsername as genName } from "./lib/identity";
 import { claimUsernameUI } from "./lib/store";
@@ -167,6 +170,7 @@ export default function App() {
   const [threadLimit, setThreadLimit] = useState(10);
   const [detailPath, setDetailPath] = useState<string[]>([]);
   const [catchToast, setCatchToast] = useState(false);
+  const [vaultDue, setVaultDue] = useState(false);
   const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>> | null>(null);
   const [busy, setBusy] = useState(false);
   const autoBaited = useRef(false);
@@ -174,6 +178,9 @@ export default function App() {
   useEffect(() => {
     init().catch((e) => log(`boot: ${(e as Error).message}`, "err"));
     getIdentity().then(setIdentity).catch(() => {});
+    vaultReminderState()
+      .then((r) => setVaultDue(r.due))
+      .catch(() => {});
   }, []);
 
   // New-catch toast: an SSE bottle event means something landed on our
@@ -326,6 +333,40 @@ export default function App() {
           <VaultButtons />
         </div>
       </div>
+
+      {vaultDue && (
+        <div className="bevel mb-2">
+          <div className="retro-titlebar">
+            <span>🔑 vault backup</span>
+            <button
+              className="retro-btn"
+              style={{ padding: "0 6px" }}
+              onClick={async () => {
+                await snoozeVaultReminder();
+                setVaultDue(false);
+              }}
+            >
+              later
+            </button>
+          </div>
+          <div className="retro-body flex items-center justify-between gap-3 text-[13px]">
+            <span>
+              no vault export yet — lose this device and every message is gone
+              forever. export your keys to a file you keep safe.
+            </span>
+            <button
+              className="retro-btn shrink-0"
+              onClick={() =>
+                exportVault()
+                  .then(() => vaultReminderState().then((r) => setVaultDue(r.due)))
+                  .catch((e) => log(`export: ${(e as Error).message}`, "err"))
+              }
+            >
+              export vault
+            </button>
+          </div>
+        </div>
+      )}
 
       {catchToast && (
         <div

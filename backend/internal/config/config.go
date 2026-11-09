@@ -22,6 +22,8 @@ type Config struct {
 	// MetricsToken protects GET /api/metrics when set; empty leaves the
 	// endpoint open (fine for local dev, set it in production).
 	MetricsToken string
+	// SentryDSN enables error reporting when set; empty disables it.
+	SentryDSN string
 }
 
 func FromEnv() Config {
@@ -37,6 +39,7 @@ func FromEnv() Config {
 		DBMinConns:          intEnv("DB_MIN_CONNS", 5),
 		BottleRetentionDays: intEnv("BOTTLE_RETENTION_DAYS", 0),
 		MetricsToken:        os.Getenv("METRICS_TOKEN"),
+		SentryDSN:           os.Getenv("SENTRY_DSN"),
 	}
 }
 

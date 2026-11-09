@@ -35,6 +35,9 @@ func (s *Server) serveStatic(c fiber.Ctx) error {
 	if raw == "/" {
 		return serveFile(c, "landing.html")
 	}
+	if raw == "/status" {
+		return serveFile(c, "status.html")
+	}
 	if raw == "/legacy" {
 		return c.Redirect().To("/legacy/")
 	}

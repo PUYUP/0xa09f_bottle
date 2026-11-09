@@ -40,6 +40,8 @@ import {
   openThread,
   fetchDevices,
   revokeDevice,
+  vaultReminderState,
+  snoozeVaultReminder,
 } from "@shared/store";
 import type { ThreadNode, DeviceInfo } from "@shared/store";
 import type { ThreadRecord, IdentityRecord } from "@shared/types";
@@ -67,6 +69,7 @@ export default function App() {
   const [legal, setLegal] = useState<"terms" | "privacy" | "how" | null>(null);
   const [devicesOpen, setDevicesOpen] = useState(false);
   const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
+  const [vaultDue, setVaultDue] = useState(false);
   const [busy, setBusy] = useState(false);
   const [identity, setIdentity] = useState<IdentityRecord | null>(null);
   const [claimName, setClaimName] = useState("");
@@ -101,6 +104,14 @@ export default function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.ready, state.keys.length, identity?.username]);
+
+  // Vault backup reminder — losing the device without an export loses
+  // every message forever.
+  useEffect(() => {
+    vaultReminderState()
+      .then((r) => setVaultDue(r.due))
+      .catch(() => {});
+  }, []);
 
   // New-catch toast: an SSE bottle event means something landed on our bait.
   useEffect(() => {
@@ -284,6 +295,41 @@ export default function App() {
         <IonNote>
           {state.activePoolKeys ?? "…"}/{5} bait in pool · e2ee on
         </IonNote>
+
+        {vaultDue && (
+          <IonItem
+            lines="full"
+            className="ion-margin-top"
+            style={{ "--background": "#fff3cd", "--color": "#333" } as React.CSSProperties}
+          >
+            <IonLabel>
+              <strong>🔑 backup your vault</strong>
+              <p>no export yet — lose this device and every message is gone forever</p>
+            </IonLabel>
+            <IonButton
+              slot="end"
+              size="small"
+              onClick={() =>
+                exportVault()
+                  .then(() => vaultReminderState().then((r) => setVaultDue(r.due)))
+                  .catch((e) => log(`export: ${(e as Error).message}`, "err"))
+              }
+            >
+              export
+            </IonButton>
+            <IonButton
+              slot="end"
+              size="small"
+              fill="clear"
+              onClick={async () => {
+                await snoozeVaultReminder();
+                setVaultDue(false);
+              }}
+            >
+              later
+            </IonButton>
+          </IonItem>
+        )}
 
         {/* composer */}
         <IonItem lines="none" className="ion-margin-top">

@@ -54,6 +54,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 
 	app.Use(logger.New())
 	app.Use(helmet.New())
+	app.Use(sentryRecovery())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{"GET", "POST", "DELETE", "HEAD", "OPTIONS"},

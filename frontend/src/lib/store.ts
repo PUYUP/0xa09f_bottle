@@ -1398,7 +1398,46 @@ export async function exportVault() {
   if (!passphrase) return;
   const encrypted = await encryptVault(JSON.stringify(payload), passphrase);
   downloadJson("a09f-identity.json", encrypted);
+  await idbPut(KV_STORE, { id: "vault:lastExport", ts: Date.now() }).catch(() => {});
   log(`exported encrypted vault with ${payload.keys.length} pool key(s)`);
+}
+
+// Vault backup reminder: without an export, losing the device means losing
+// every message forever. We nudge once the app has been used for a few days
+// without a recent export, and let the user snooze for a week.
+const REMINDER_MIN_AGE_MS = 3 * 24 * 3600 * 1000;
+const REMINDER_EXPORT_STALE_MS = 30 * 24 * 3600 * 1000;
+const REMINDER_SNOOZE_MS = 7 * 24 * 3600 * 1000;
+
+async function kvTs(id: string): Promise<number> {
+  const rec = await idbGet<{ ts?: number }>(KV_STORE, id).catch(() => null);
+  return rec?.ts || 0;
+}
+
+export interface VaultReminder {
+  due: boolean;
+  lastExport: number; // unix ms, 0 = never
+}
+
+export async function vaultReminderState(): Promise<VaultReminder> {
+  const [firstSeen, lastExport, snooze] = await Promise.all([
+    kvTs("app:firstSeen"),
+    kvTs("vault:lastExport"),
+    kvTs("vault:reminderSnooze"),
+  ]);
+  const now = Date.now();
+  const stale = !lastExport || now - lastExport > REMINDER_EXPORT_STALE_MS;
+  const snoozed = snooze && now - snooze < REMINDER_SNOOZE_MS;
+  const due =
+    !!firstSeen &&
+    now - firstSeen > REMINDER_MIN_AGE_MS &&
+    stale &&
+    !snoozed;
+  return { due, lastExport };
+}
+
+export async function snoozeVaultReminder() {
+  await idbPut(KV_STORE, { id: "vault:reminderSnooze", ts: Date.now() }).catch(() => {});
 }
 
 // Vault imports restore the identity JWK, but older vaults lack the local
@@ -1849,6 +1888,9 @@ export async function blockOrReportUser(kind: "block" | "report", targetInput: s
 export async function init() {
   setState({ ready: false });
   await getIdentity().catch(() => null);
+  // First-run marker for the vault-backup reminder — set once, never reset.
+  const seen = await kvTs("app:firstSeen");
+  if (!seen) await idbPut(KV_STORE, { id: "app:firstSeen", ts: Date.now() }).catch(() => {});
   await loadKeys();
   await renderInbox();
   try {

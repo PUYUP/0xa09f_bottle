@@ -13,12 +13,21 @@ import (
 	"a09f/bottle/internal/pgstore"
 	"a09f/bottle/internal/store"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/joho/godotenv"
 )
 
 func main() {
 	_ = godotenv.Load()
 	cfg := config.FromEnv()
+	if cfg.SentryDSN != "" {
+		if err := sentry.Init(sentry.ClientOptions{Dsn: cfg.SentryDSN}); err != nil {
+			log.Printf("sentry init: %v", err)
+		} else {
+			defer sentry.Flush(2 * time.Second)
+			log.Printf("sentry error reporting enabled")
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
