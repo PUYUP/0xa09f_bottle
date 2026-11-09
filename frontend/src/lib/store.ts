@@ -994,7 +994,12 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         if (rec?.privateJwk) privJwks = [rec.privateJwk];
       }
     }
-    if (!privJwks.length) continue;
+    if (!privJwks.length) {
+      if (envelope.kid) {
+        log(`decrypt skip ${bottle.id.slice(0, 8)}: no key for kid=${envelope.kid.slice(0, 40)}`, "warn");
+      }
+      continue;
+    }
     try {
       let rawSession: ArrayBuffer | null = null;
       let plain: Plain | null = null;
@@ -1010,9 +1015,10 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         }
       }
       if (!rawSession || !plain) {
-        if (envelope.kid?.startsWith(REPLY_PREFIX)) {
-          log(`decrypt fail ${bottle.id.slice(0, 8)}: kid=${envelope.kid} tried=${privJwks.length} keys`, "warn");
-        }
+        log(
+          `decrypt fail ${bottle.id.slice(0, 8)}: kid=${envelope.kid ?? "?"} tried=${privJwks.length} keys depth=${bottle.depth}`,
+          "warn"
+        );
         continue;
       }
       if (isSelf) {
