@@ -47,7 +47,7 @@ ON CONFLICT (user_id) DO NOTHING`,
 func (p *PGStore) getSubscription(ctx context.Context, userID string) (*Subscription, error) {
 	var s Subscription
 	err := p.pool.QueryRow(ctx, `
-SELECT user_id, polar_subscription_id, polar_customer_id, status,
+SELECT user_id, COALESCE(polar_subscription_id,''), COALESCE(polar_customer_id,''), status,
        trial_ends_at, trial_extensions, current_period_end, created_at, updated_at
 FROM subscriptions WHERE user_id = $1`, userID).Scan(
 		&s.UserID, &s.PolarSubscriptionID, &s.PolarCustomerID, &s.Status,
