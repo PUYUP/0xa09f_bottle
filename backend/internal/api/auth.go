@@ -73,7 +73,47 @@ func (s *Server) authUser(c fiber.Ctx) (pgstore.User, bool) {
 	if !keyauth.VerifyProof(priv, user.PublicKey, uid, ts, nonce, proof, time.Now().Unix()) {
 		return pgstore.User{}, false
 	}
+	// Device registry: when the client sends X-Device-Id we record the
+	// sighting and enforce revocation — a revoked device fails auth even
+	// with a valid identity proof. Requests without the header (older
+	// clients) skip tracking entirely. TouchDevice costs up to two PG
+	// queries, so sightings are throttled to one per minute per device;
+	// revocation therefore takes effect within ~60s of the last sighting.
+	if deviceID := c.Get("X-Device-Id"); deviceID != "" && len(deviceID) <= 128 {
+		if s.deviceSeenRecently(uid, deviceID) {
+			return user, true
+		}
+		revoked, err := s.pg.TouchDevice(c.Context(), uid, deviceID, c.Get("User-Agent"))
+		if err != nil {
+			return pgstore.User{}, false
+		}
+		if revoked {
+			return pgstore.User{}, false
+		}
+	}
 	return user, true
+}
+
+// deviceSeenRecently reports whether this user+device was checked within
+// the last 60s, and records the check when it wasn't. The map is pruned
+// lazily once it grows past 10k entries.
+func (s *Server) deviceSeenRecently(userID, deviceID string) bool {
+	key := userID + "\x00" + deviceID
+	now := time.Now().Unix()
+	s.devMu.Lock()
+	defer s.devMu.Unlock()
+	if last, ok := s.devSeen[key]; ok && now-last < 60 {
+		return true
+	}
+	if len(s.devSeen) > 10000 {
+		for k, t := range s.devSeen {
+			if now-t >= 60 {
+				delete(s.devSeen, k)
+			}
+		}
+	}
+	s.devSeen[key] = now
+	return false
 }
 
 // requireAuth returns the authenticated user or a 401/503 error.

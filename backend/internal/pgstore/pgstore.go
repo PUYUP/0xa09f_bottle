@@ -147,6 +147,20 @@ CREATE TABLE IF NOT EXISTS user_sync_records (
   PRIMARY KEY (user_id, record_key)
 );
 CREATE INDEX IF NOT EXISTS user_sync_records_user_idx ON user_sync_records (user_id, updated_at);
+
+-- user_devices tracks which client devices have authenticated as a user.
+-- Revocation is enforced in authUser: a revoked device_id fails
+-- proof-of-possession even with a valid identity key.
+CREATE TABLE IF NOT EXISTS user_devices (
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id  TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  first_seen BIGINT NOT NULL,
+  last_seen  BIGINT NOT NULL,
+  revoked    BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (user_id, device_id)
+);
+CREATE INDEX IF NOT EXISTS user_devices_user_idx ON user_devices (user_id, last_seen DESC);
 `
 
 type PGStore struct {

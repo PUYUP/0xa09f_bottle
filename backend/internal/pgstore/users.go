@@ -277,6 +277,75 @@ func (p *PGStore) DeleteUser(ctx context.Context, userID string) error {
 	return tx.Commit(ctx)
 }
 
+// Device is a registered client device for a user.
+type Device struct {
+	DeviceID  string `json:"deviceId"`
+	UserAgent string `json:"userAgent"`
+	FirstSeen int64  `json:"firstSeen"`
+	LastSeen  int64  `json:"lastSeen"`
+	Revoked   bool   `json:"revoked"`
+	Current   bool   `json:"current"` // filled by the API layer
+}
+
+// TouchDevice upserts a device sighting and reports whether it is revoked.
+// Called on every authenticated request; last_seen writes are throttled to
+// one per minute per device to keep it cheap.
+func (p *PGStore) TouchDevice(ctx context.Context, userID, deviceID, userAgent string) (bool, error) {
+	now := time.Now().Unix()
+	var revoked bool
+	err := p.pool.QueryRow(ctx, `
+INSERT INTO user_devices (user_id, device_id, user_agent, first_seen, last_seen)
+VALUES ($1,$2,$3,$4,$4)
+ON CONFLICT (user_id, device_id) DO UPDATE SET
+  last_seen = EXCLUDED.last_seen,
+  user_agent = CASE WHEN EXCLUDED.last_seen - user_devices.last_seen > 60
+                    THEN EXCLUDED.user_agent ELSE user_devices.user_agent END
+WHERE EXCLUDED.last_seen - user_devices.last_seen > 60 OR user_devices.user_agent = ''
+RETURNING revoked`,
+		userID, deviceID, userAgent, now).Scan(&revoked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// throttled: no row returned, fetch revoked flag directly
+		err = p.pool.QueryRow(ctx,
+			`SELECT revoked FROM user_devices WHERE user_id = $1 AND device_id = $2`,
+			userID, deviceID).Scan(&revoked)
+	}
+	return revoked, err
+}
+
+func (p *PGStore) ListDevices(ctx context.Context, userID string) ([]Device, error) {
+	rows, err := p.pool.Query(ctx, `
+SELECT device_id, user_agent, first_seen, last_seen, revoked
+FROM user_devices WHERE user_id = $1 ORDER BY last_seen DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Device
+	for rows.Next() {
+		var d Device
+		if err := rows.Scan(&d.DeviceID, &d.UserAgent, &d.FirstSeen, &d.LastSeen, &d.Revoked); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// RevokeDevice marks a device as revoked — subsequent requests carrying its
+// X-Device-Id fail authentication even with a valid identity proof.
+func (p *PGStore) RevokeDevice(ctx context.Context, userID, deviceID string) error {
+	ct, err := p.pool.Exec(ctx,
+		`UPDATE user_devices SET revoked = TRUE WHERE user_id = $1 AND device_id = $2`,
+		userID, deviceID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (p *PGStore) BottleExists(ctx context.Context, id string) (bool, error) {
 	var exists bool
 	err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bottles WHERE id = $1)`, id).Scan(&exists)

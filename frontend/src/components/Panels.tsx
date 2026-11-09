@@ -7,6 +7,7 @@ import {
   changeUsernameUI,
   deleteAccount,
   exportVault,
+  fetchDevices,
   fetchMyStats,
   fetchPoolStatus,
   formatExpiry,
@@ -18,9 +19,10 @@ import {
   refreshBlocks,
   refreshPoolKeys,
   restorePoolKeys,
+  revokeDevice,
   unblockUser,
 } from "../lib/store";
-import type { ClientMeta, PoolKeyStatus, UserStats } from "../lib/store";
+import type { ClientMeta, DeviceInfo, PoolKeyStatus, UserStats } from "../lib/store";
 import { useApp } from "../hooks/useApp";
 import type { KeyRecord } from "../lib/types";
 
@@ -250,9 +252,17 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
   const { blocks } = useApp();
   const [username, setUsername] = useState("");
   const [target, setTarget] = useState("");
+  const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
   const identity = useAppIdentity();
 
   if (blocks === null) refreshBlocks().catch(() => {});
+
+  useEffect(() => {
+    if (!identity?.username) return;
+    fetchDevices()
+      .then(setDevices)
+      .catch(() => setDevices([]));
+  }, [identity?.username]);
 
   return (
     <Panel title="👤 account" onClose={onClose}>
@@ -345,6 +355,36 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
                   </div>
                 ))}
               </div>
+            </div>
+            <div>
+              <p className="mb-1 text-[13px] text-neutral-600">devices:</p>
+              {devices === null && <span className="text-neutral-600">loading…</span>}
+              {devices?.length === 0 && <span className="text-neutral-600">no devices registered yet</span>}
+              {devices?.map((d) => (
+                <div key={d.deviceId} className="flex items-baseline gap-3">
+                  <span title={d.deviceId} className="font-mono text-[12px]">
+                    {d.deviceId.slice(0, 8)}…
+                  </span>
+                  <span className="text-[12px] text-neutral-600">
+                    {d.userAgent ? d.userAgent.slice(0, 40) : "unknown client"} · seen{" "}
+                    {new Date(d.lastSeen * 1000).toLocaleString()}
+                    {d.current && " · this device"}
+                    {d.revoked && " · revoked"}
+                  </span>
+                  {!d.current && !d.revoked && (
+                    <span
+                      className="retro-link text-[13px]"
+                      onClick={() =>
+                        revokeDevice(d.deviceId)
+                          .then(() => fetchDevices().then(setDevices))
+                          .catch((e) => log(`revoke: ${(e as Error).message}`, "err"))
+                      }
+                    >
+                      revoke
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
             <div className="border-t border-neutral-300 pt-2">
               <p className="mb-1 text-[13px] text-neutral-600">

@@ -1,5 +1,5 @@
 import { API_BASE } from "./api";
-import { idbGet, idbPut, META_STORE } from "./idb";
+import { idbGet, idbPut, KV_STORE, META_STORE } from "./idb";
 import type { IdentityRecord, JWK } from "./types";
 import { b64urlToBytes, bytesToB64 } from "./util";
 
@@ -148,16 +148,36 @@ export async function computeKidProof(
   return { ts, proof: await kidProofDigest(bits, kid, ts) };
 }
 
+let deviceIdCache: string | null = null;
+
+// getDeviceId returns a stable per-install identifier sent as X-Device-Id
+// on authenticated requests. The server uses it for the device list and
+// session revocation; it is not a secret and reveals nothing beyond "this
+// install".
+async function getDeviceId(): Promise<string> {
+  if (deviceIdCache) return deviceIdCache;
+  const rec = await idbGet<{ v?: string }>(KV_STORE, "device:id").catch(() => null);
+  if (rec?.v) {
+    deviceIdCache = rec.v;
+    return rec.v;
+  }
+  const id = crypto.randomUUID();
+  await idbPut(KV_STORE, { id: "device:id", v: id }).catch(() => {});
+  deviceIdCache = id;
+  return id;
+}
+
 export async function authHeaders(): Promise<Record<string, string> | null> {
   const id = await getIdentity();
   if (!id.username || !id.userId) return null;
-  const [serverPub, nonce] = await Promise.all([getServerPub(), fetchNonce(id.userId)]);
+  const [serverPub, nonce, deviceId] = await Promise.all([getServerPub(), fetchNonce(id.userId), getDeviceId()]);
   const { ts, proof } = await computeProof(id.privateJwk, serverPub, id.userId, nonce);
   return {
     "X-User-Id": id.userId,
     "X-Auth-Ts": String(ts),
     "X-Auth-Nonce": nonce,
     "X-Auth-Proof": proof,
+    "X-Device-Id": deviceId,
   };
 }
 

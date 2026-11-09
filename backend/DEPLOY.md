@@ -50,6 +50,15 @@ sudo certbot --nginx -d relay.a09f.com
 
 Verifikasi: `curl https://relay.a09f.com/api/health`
 
+## Monitoring
+
+`GET /api/metrics` mengembalikan counter request, gauge (`poolKeys`,
+`outboxDepth`), status dependency (`redis`, `pg`) dan daftar `alerts`
+(`pg_outbox_backlog`, `redis_down`, `pg_down`). Set `METRICS_TOKEN` di
+`.env.production` lalu panggil dengan header `X-Metrics-Token: <token>` —
+tanpa token endpoint mengembalikan 401. Cocok di-poll oleh uptime monitor
+atau diekspor ke Prometheus via exporter sederhana.
+
 ## Update berikutnya
 
 ```bash

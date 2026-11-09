@@ -19,6 +19,9 @@ type Config struct {
 	// BottleRetentionDays controls PG archive retention; 0 keeps bottles
 	// forever (default — user messages are never auto-deleted).
 	BottleRetentionDays int
+	// MetricsToken protects GET /api/metrics when set; empty leaves the
+	// endpoint open (fine for local dev, set it in production).
+	MetricsToken string
 }
 
 func FromEnv() Config {
@@ -33,6 +36,7 @@ func FromEnv() Config {
 		DBMaxConns:  intEnv("DB_MAX_CONNS", 25),
 		DBMinConns:  intEnv("DB_MIN_CONNS", 5),
 		BottleRetentionDays: intEnv("BOTTLE_RETENTION_DAYS", 0),
+		MetricsToken:        os.Getenv("METRICS_TOKEN"),
 	}
 }
 

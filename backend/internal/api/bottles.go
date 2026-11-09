@@ -67,6 +67,7 @@ func (s *Server) createBottle(c fiber.Ctx) error {
 	}
 	s.syncBottlePG(c.Context(), bottle)
 	s.events.publish(bottle)
+	s.metrics.inc("bottles_created")
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": bottle.ID, "status": bottle.Status})
 }
 
@@ -584,6 +585,7 @@ func (s *Server) deleteBottle(c fiber.Ctx) error {
 	if err := s.store.DeleteBottle(c.Context(), id); err != nil {
 		log.Printf("redis delete %s: %v", id, err)
 	}
+	s.metrics.inc("bottle_deletes")
 	return c.JSON(fiber.Map{"ok": true})
 }
 
@@ -633,6 +635,7 @@ func (s *Server) reportBottle(c fiber.Ctx) error {
 	if err := s.pg.ReportBottle(c.Context(), id, reporter, req.Reason); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "report failed")
 	}
+	s.metrics.inc("bottle_reports")
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"ok": true})
 }
 
@@ -668,6 +671,7 @@ func (s *Server) pickupBottle(c fiber.Ctx) error {
 	if !result.OK {
 		return c.Status(fiber.StatusConflict).JSON(result)
 	}
+	s.metrics.inc("pickups")
 	if s.pg != nil {
 		s.archiveBottle(c.Context(), id)
 	}

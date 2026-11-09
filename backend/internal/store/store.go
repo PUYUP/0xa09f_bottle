@@ -1108,6 +1108,11 @@ func (s *Store) PGOutboxPush(ctx context.Context, raw string) error {
 	return err
 }
 
+// PGOutboxLen reports how many bottles are waiting for Postgres persistence.
+func (s *Store) PGOutboxLen(ctx context.Context) (int64, error) {
+	return s.rdb.LLen(ctx, pgOutboxKey).Result()
+}
+
 // PGOutboxPop blocks up to timeout for the oldest outbox entry (RPOP =
 // oldest, since pushes LPUSH to the head). Returns redis.Nil on timeout.
 func (s *Store) PGOutboxPop(ctx context.Context, timeout time.Duration) (string, error) {

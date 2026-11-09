@@ -26,10 +26,15 @@ type Server struct {
 	authOnce sync.Once
 	authPriv *ecdh.PrivateKey
 	authErr  error
+
+	metrics *metrics
+
+	devMu   sync.Mutex
+	devSeen map[string]int64
 }
 
 func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
-	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub()}
+	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub(), metrics: newMetrics(), devSeen: map[string]int64{}}
 	if pg != nil {
 		go s.rebuildPool(ctx)
 		go s.pgReconciler(ctx)
@@ -45,7 +50,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{"GET", "POST", "DELETE", "HEAD", "OPTIONS"},
-		AllowHeaders: []string{"Content-Type", "X-User-Id", "X-Auth-Ts", "X-Auth-Nonce", "X-Auth-Proof"},
+		AllowHeaders: []string{"Content-Type", "X-User-Id", "X-Auth-Ts", "X-Auth-Nonce", "X-Auth-Proof", "X-Device-Id"},
 	}))
 
 	depositLimiter := limiter.New(limiter.Config{
@@ -92,6 +97,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 		},
 	})
 
+	app.Get("/api/metrics", s.metricsHandler)
 	app.Get("/api/health", s.health)
 	app.Get("/api/ip", s.clientIP)
 	app.Get("/api/health/live", s.live)
@@ -113,6 +119,8 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Post("/api/auth/pop-token", nonceLimiter, s.popToken)
 	app.Post("/api/users", userLimiter, s.registerUser)
 	app.Get("/api/me", s.me)
+	app.Get("/api/me/devices", s.listDevices)
+	app.Delete("/api/me/devices/:deviceId", userLimiter, s.revokeDevice)
 	app.Post("/api/me/username", userLimiter, s.changeUsername)
 	app.Delete("/api/me", userLimiter, s.deleteMe)
 	app.Get("/api/me/stats", s.meStats)

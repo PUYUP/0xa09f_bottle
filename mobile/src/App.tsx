@@ -19,7 +19,7 @@ import {
   IonModal,
   IonFooter,
 } from "@ionic/react";
-import { send, refresh, fish, cloudUpload, cloudDownload, chatbox, trash, helpCircle } from "ionicons/icons";
+import { send, refresh, fish, cloudUpload, cloudDownload, chatbox, trash, helpCircle, phonePortraitOutline } from "ionicons/icons";
 import { getState, subscribe } from "@shared/store";
 import {
   init,
@@ -38,8 +38,10 @@ import {
   log,
   fetchThreadChildren,
   openThread,
+  fetchDevices,
+  revokeDevice,
 } from "@shared/store";
-import type { ThreadNode } from "@shared/store";
+import type { ThreadNode, DeviceInfo } from "@shared/store";
 import type { ThreadRecord, IdentityRecord } from "@shared/types";
 import { MAX_THREAD_DEPTH } from "@shared/crypto";
 import { getIdentity, randomUsername as genName } from "@shared/identity";
@@ -63,6 +65,8 @@ export default function App() {
   const [replyTarget, setReplyTarget] = useState<ThreadRecord | null>(null);
   const [baitOpen, setBaitOpen] = useState(false);
   const [legal, setLegal] = useState<"terms" | "privacy" | "how" | null>(null);
+  const [devicesOpen, setDevicesOpen] = useState(false);
+  const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [identity, setIdentity] = useState<IdentityRecord | null>(null);
   const [claimName, setClaimName] = useState("");
@@ -348,6 +352,25 @@ export default function App() {
           {identity?.username && (
             <IonButton
               size="small"
+              fill="outline"
+              onClick={() => {
+                setDevices(null);
+                setDevicesOpen(true);
+                fetchDevices()
+                  .then(setDevices)
+                  .catch((e) => {
+                    log(`devices: ${(e as Error).message}`, "err");
+                    setDevices([]);
+                  });
+              }}
+            >
+              <IonIcon icon={phonePortraitOutline} slot="start" />
+              devices
+            </IonButton>
+          )}
+          {identity?.username && (
+            <IonButton
+              size="small"
               fill="clear"
               color="danger"
               onClick={() => {
@@ -560,6 +583,66 @@ export default function App() {
         </IonHeader>
         <IonContent className="ion-padding" style={{ fontSize: 14, lineHeight: 1.5 }}>
           {legal === "terms" ? <TermsContent /> : legal === "privacy" ? <PrivacyContent /> : <HowItWorksContent />}
+        </IonContent>
+      </IonModal>
+
+      {/* devices */}
+      <IonModal isOpen={devicesOpen} onDidDismiss={() => setDevicesOpen(false)}>
+        <IonHeader>
+          <IonToolbar>
+            <IonTitle>devices</IonTitle>
+            <IonButtons slot="end">
+              <IonButton onClick={() => setDevicesOpen(false)}>close</IonButton>
+            </IonButtons>
+          </IonToolbar>
+        </IonHeader>
+        <IonContent className="ion-padding">
+          <IonNote>
+            devices that have signed in with this identity. revoking cuts off that device within a
+            minute — it keeps its keys but can no longer prove they are yours.
+          </IonNote>
+          <IonList inset>
+            {devices === null && (
+              <IonItem lines="none">
+                <IonSpinner slot="start" />
+                <IonLabel>loading…</IonLabel>
+              </IonItem>
+            )}
+            {devices?.length === 0 && (
+              <IonItem lines="none">
+                <IonLabel>no devices registered yet</IonLabel>
+              </IonItem>
+            )}
+            {devices?.map((d) => (
+              <IonItem key={d.deviceId} lines="full">
+                <IonLabel>
+                  <h3 style={{ fontFamily: "monospace" }}>{d.deviceId.slice(0, 8)}…</h3>
+                  <p>
+                    {d.userAgent ? d.userAgent.slice(0, 48) : "unknown client"} · seen{" "}
+                    {new Date(d.lastSeen * 1000).toLocaleString()}
+                    {d.current && " · this device"}
+                    {d.revoked && " · revoked"}
+                  </p>
+                </IonLabel>
+                {!d.current && !d.revoked && (
+                  <IonButton
+                    slot="end"
+                    size="small"
+                    fill="outline"
+                    color="danger"
+                    onClick={() => {
+                      if (!window.confirm(`revoke device ${d.deviceId.slice(0, 8)}…? it will lose access within a minute.`)) return;
+                      revokeDevice(d.deviceId)
+                        .then(() => fetchDevices().then(setDevices))
+                        .catch((e) => log(`revoke: ${(e as Error).message}`, "err"));
+                    }}
+                  >
+                    revoke
+                  </IonButton>
+                )}
+              </IonItem>
+            ))}
+          </IonList>
         </IonContent>
       </IonModal>
 

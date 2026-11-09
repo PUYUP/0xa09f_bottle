@@ -107,6 +107,7 @@ func (s *Server) registerUser(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "create failed")
 	}
+	s.metrics.inc("user_registrations")
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"user": publicUser(user)})
 }
 
@@ -168,6 +169,49 @@ func (s *Server) changeUsername(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"user": publicUser(updated)})
 }
 
+// listDevices returns the caller's registered client devices. The current
+// device is flagged via the X-Device-Id header when present.
+func (s *Server) listDevices(c fiber.Ctx) error {
+	user, err := s.requireAuth(c)
+	if err != nil {
+		return err
+	}
+	devices, err := s.pg.ListDevices(c.Context(), user.ID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "lookup failed")
+	}
+	current := c.Get("X-Device-Id")
+	out := make([]pgstore.Device, 0, len(devices))
+	for _, d := range devices {
+		d.Current = d.DeviceID == current
+		out = append(out, d)
+	}
+	return c.JSON(fiber.Map{"devices": out})
+}
+
+// revokeDevice marks a device as revoked; its next authenticated request
+// fails proof-of-possession.
+func (s *Server) revokeDevice(c fiber.Ctx) error {
+	user, err := s.requireAuth(c)
+	if err != nil {
+		return err
+	}
+	deviceID := c.Params("deviceId")
+	if len(deviceID) == 0 || len(deviceID) > 128 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid device id")
+	}
+	if deviceID == c.Get("X-Device-Id") {
+		return fiber.NewError(fiber.StatusBadRequest, "cannot revoke the current device")
+	}
+	if err := s.pg.RevokeDevice(c.Context(), user.ID, deviceID); err != nil {
+		if errors.Is(err, pgstore.ErrNotFound) {
+			return fiber.NewError(fiber.StatusNotFound, "device not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, "revoke failed")
+	}
+	return c.JSON(fiber.Map{"ok": true})
+}
+
 // deleteMe permanently removes the authenticated user's account: identity,
 // username, key ownership, blocks, reports they filed, and encrypted sync
 // records. Encrypted bottles are untouched — the server cannot read them
@@ -182,6 +226,7 @@ func (s *Server) deleteMe(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "delete failed")
 	}
 	_ = s.store.PopSetDelete(c.Context(), user.ID)
+	s.metrics.inc("account_deletes")
 	return c.JSON(fiber.Map{"ok": true})
 }
 
@@ -325,5 +370,6 @@ func (s *Server) reportUser(c fiber.Ctx) error {
 	if err := s.pg.ReportUser(c.Context(), user.ID, target, req.Reason); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "report failed")
 	}
+	s.metrics.inc("user_reports")
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"ok": true})
 }

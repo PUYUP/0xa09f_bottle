@@ -70,6 +70,7 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 			}
 		}()
 	}
+	s.metrics.inc("key_deposits")
 	return c.JSON(fiber.Map{"accepted": len(req.Keys)})
 }
 

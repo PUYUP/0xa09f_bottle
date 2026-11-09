@@ -1781,6 +1781,24 @@ export async function changeUsernameUI(username: string) {
   log(`username changed to @${res?.user?.username || v}`);
 }
 
+export interface DeviceInfo {
+  deviceId: string;
+  userAgent: string;
+  firstSeen: number;
+  lastSeen: number;
+  revoked: boolean;
+  current: boolean;
+}
+
+export async function fetchDevices(): Promise<DeviceInfo[]> {
+  const { devices = [] } = await api<{ devices?: DeviceInfo[] }>("/api/me/devices");
+  return devices;
+}
+
+export async function revokeDevice(deviceId: string) {
+  await api(`/api/me/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+}
+
 // deleteAccount permanently removes the server-side account (username,
 // identity, key ownership, blocks, reports, sync records) then wipes all
 // local data and reloads into a fresh anonymous state. Encrypted bottles
