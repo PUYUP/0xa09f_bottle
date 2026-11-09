@@ -124,6 +124,22 @@ func (s *Server) popToken(c fiber.Ctx) error {
 	if len(verified) == 0 {
 		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "no_valid_proofs"})
 	}
+	if len(verified) < len(kids) {
+		vset := make(map[string]struct{}, len(verified))
+		for _, k := range verified {
+			vset[k] = struct{}{}
+		}
+		missing := make([]string, 0, len(kids)-len(verified))
+		for _, k := range kids {
+			if _, ok := vset[k]; !ok {
+				missing = append(missing, k)
+			}
+		}
+		if len(missing) > 5 {
+			missing = missing[:5]
+		}
+		log.Printf("pop-token partial: %d/%d kids verified, missing e.g. %v", len(verified), len(kids), missing)
+	}
 
 	// Verified-set expansion: when the request proves the identity kid
 	// (self:<userId>), merge this request's verified kids into the user's

@@ -311,14 +311,17 @@ func (s *Server) listBottleChildren(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
 	}
 	add(redisChildren)
+	pgCount := 0
 	if s.pg != nil {
 		pgChildren, err := s.pg.ListChildren(c.Context(), parentID, limit)
 		if err != nil {
 			log.Printf("pg list children %s: %v", parentID, err)
 		} else {
+			pgCount = len(pgChildren)
 			add(pgChildren)
 		}
 	}
+	log.Printf("children %s: tokenKids=%d redis=%d pg=%d merged=%d", parentID, len(tokenKids), len(redisChildren), pgCount, len(merged))
 	sort.Slice(merged, func(i, j int) bool {
 		if merged[i].CreatedAt != merged[j].CreatedAt {
 			return merged[i].CreatedAt < merged[j].CreatedAt
