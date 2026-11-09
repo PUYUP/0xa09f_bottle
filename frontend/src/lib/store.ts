@@ -730,7 +730,14 @@ async function privateJwkForKid(kid: string): Promise<JWK | null> {
   if (kid.startsWith(REPLY_PREFIX)) {
     const parentId = kid.slice(REPLY_PREFIX.length);
     const stored = await idbGet<ThreadRecord>(META_STORE, kid).catch(() => null);
-    if (stored?.privateJwk) return stored.privateJwk;
+    // Vault imports can restore reply:<id> records whose privateJwk is a
+    // legacy/non-JWK shape — using it makes importKey throw and silently
+    // drops the proof (server sees hasProof=false). Only trust a stored
+    // key that actually looks like an EC JWK; otherwise derive.
+    const storedJwk = stored?.privateJwk;
+    if (storedJwk && storedJwk.kty === "EC" && storedJwk.crv === "P-256" && storedJwk.d) {
+      return storedJwk;
+    }
     const idt = await getIdentity().catch(() => null);
     if (!idt?.privateJwk || !parentId) {
       log(`pop proof: no identity for ${kid.slice(0, 24)}`, "warn");
@@ -932,8 +939,9 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
     if (!record && !isSelf && typeof envelope.kid === "string" && envelope.kid.startsWith(REPLY_PREFIX)) {
       // stored reply keys (legacy/random) first, then deterministic derive
       const replyRec = await idbGet<ThreadRecord>(META_STORE, envelope.kid).catch(() => null);
-      if (replyRec?.privateJwk) {
-        record = { privateJwk: replyRec.privateJwk } as KeyRecord;
+      const replyJwk = replyRec?.privateJwk;
+      if (replyJwk && replyJwk.kty === "EC" && replyJwk.crv === "P-256" && replyJwk.d) {
+        record = { privateJwk: replyJwk } as KeyRecord;
       } else {
         const parentId = envelope.kid.slice(REPLY_PREFIX.length);
         const idt = await getIdentity().catch(() => null);
