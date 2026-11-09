@@ -707,15 +707,16 @@ export default function App() {
                     </span>
                   )}
                   {isSent && bottleId && (
-                    <span
-                      className="retro-link ml-2 text-red-800"
+                    <button
+                      className="retro-btn retro-btn-sm ml-2"
+                      style={{ color: "#a00" }}
                       onClick={(e) => {
                         e.stopPropagation();
                         deleteBottle(bottleId).catch(() => {});
                       }}
                     >
-                      [🗑]
-                    </span>
+                      🗑
+                    </button>
                   )}
                 </div>
                 {r.rec.deleted ? (

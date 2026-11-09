@@ -486,19 +486,8 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     envelopes: [...envelopes, selfEnv],
   };
 
-  try {
-    await api("/api/bottles", {
-      method: "POST",
-      body: JSON.stringify(bottle),
-    });
-  } catch (e) {
-    if ((e as { data?: { error?: string } }).data?.error === "blocked_key_conflict" && !retried) {
-      log("some recipients are blocked; refetching pool keys", "warn");
-      return dropBottle(text, ttlRaw, true);
-    }
-    throw e;
-  }
-
+  // Optimistic: the sent record renders immediately; the POST reconciles
+  // in the background and rolls back the local copy on failure.
   await storeSentRecord(bottleId, {
     id: bottleId,
     createdAt: Math.floor(Date.now() / 1000),
@@ -509,6 +498,20 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
   }, { v: 1, text: trimmed, reply: replyPair.publicJwk }, "");
   await renderInbox();
   log(`dropped bottle ${bottleId} to ${envelopes.length} blind recipients`);
+  api("/api/bottles", {
+    method: "POST",
+    body: JSON.stringify(bottle),
+  }).catch(async (e) => {
+    await idbDelete(META_STORE, `sent:${bottleId}`).catch(() => {});
+    await renderInbox();
+    const err = (e as { data?: { error?: string } }).data?.error;
+    if (err === "blocked_key_conflict" && !retried) {
+      log("some recipients are blocked; refetching pool keys", "warn");
+      dropBottle(text, ttlRaw, true).catch(() => {});
+      return;
+    }
+    log(`cast failed: ${(e as Error).message}`, "warn");
+  });
 }
 
 export async function replyBottle(parent: ThreadRecord, text: string) {
@@ -553,29 +556,8 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
   // or use the parent's own id when replying to a root (or a legacy reply
   // that predates the field).
   const rootId = bottle.rootId || bottle.id;
-  try {
-    await api("/api/bottles", {
-      method: "POST",
-      body: JSON.stringify({
-        id: bottleId,
-        createdAt: Math.floor(Date.now() / 1000),
-        depth,
-        parentId: bottle.id,
-        rootId,
-        maxDeliveries: 1,
-        payloadIv: bytesToB64(payloadIV),
-        ciphertext: bytesToB64(new Uint8Array(ciphertext)),
-        envelopes: [env, selfEnv],
-      }),
-    });
-  } catch (e) {
-    const err = (e as { data?: { error?: string } }).data?.error;
-    if (err === "blocked_thread") {
-      log("reply blocked — a block exists between you and this user", "warn");
-      return;
-    }
-    throw e;
-  }
+  // Optimistic: show the reply immediately; the POST reconciles in the
+  // background and removes the local record if the server rejects it.
   await storeSentRecord(bottleId, {
     id: bottleId,
     createdAt: Math.floor(Date.now() / 1000),
@@ -587,6 +569,29 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
   }, { v: 1, text: text.trim(), reply: replyJwk }, env.kid!);
   await renderInbox();
   log(`replied to ${bottle.id.slice(0, 8)} (depth ${depth}/${MAX_THREAD_DEPTH})`);
+  api("/api/bottles", {
+    method: "POST",
+    body: JSON.stringify({
+      id: bottleId,
+      createdAt: Math.floor(Date.now() / 1000),
+      depth,
+      parentId: bottle.id,
+      rootId,
+      maxDeliveries: 1,
+      payloadIv: bytesToB64(payloadIV),
+      ciphertext: bytesToB64(new Uint8Array(ciphertext)),
+      envelopes: [env, selfEnv],
+    }),
+  }).catch(async (e) => {
+    await idbDelete(META_STORE, `sent:${bottleId}`).catch(() => {});
+    await renderInbox();
+    const err = (e as { data?: { error?: string } }).data?.error;
+    if (err === "blocked_thread") {
+      log("reply blocked — a block exists between you and this user", "warn");
+      return;
+    }
+    log(`reply failed: ${(e as Error).message}`, "warn");
+  });
 }
 
 export async function claimBottle(bottleId: string, kid: string, pickupToken: string): Promise<Claim> {
@@ -655,13 +660,21 @@ async function markBottleDeleted(bottleId: string) {
 // self:<uid> marker.
 export async function deleteBottle(bottleId: string) {
   if (!window.confirm("delete this message for everyone? this cannot be undone — recipients will see a tombstone.")) return;
+  // Optimistic tombstone: hide the content immediately, restore on failure.
+  const backups: ThreadRecord[] = [];
+  for (const prefix of ["caught:", "sent:"]) {
+    const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottleId}`).catch(() => null);
+    if (rec && !rec.deleted) backups.push(JSON.parse(JSON.stringify(rec)) as ThreadRecord);
+  }
+  await markBottleDeleted(bottleId);
   try {
     await api(`/api/bottles/${encodeURIComponent(bottleId)}`, { method: "DELETE" });
   } catch (e) {
+    for (const rec of backups) await idbPut(META_STORE, rec).catch(() => {});
+    await renderInbox();
     log(`delete failed: ${(e as Error).message}`, "warn");
     return;
   }
-  await markBottleDeleted(bottleId);
   log(`deleted bottle ${bottleId.slice(0, 8)}`);
 }
 

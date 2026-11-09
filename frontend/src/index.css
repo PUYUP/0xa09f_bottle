@@ -52,6 +52,13 @@ body {
   cursor: default;
 }
 
+.retro-btn-sm {
+  font-size: 12px;
+  padding: 1px 8px;
+  margin: 0 2px;
+  vertical-align: baseline;
+}
+
 .retro-cast {
   min-width: 84px;
   min-height: 56px;

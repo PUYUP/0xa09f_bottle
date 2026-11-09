@@ -55,40 +55,39 @@ function MessageNode({
       {!deleted && (
       <div className="mt-1 text-[13px]">
         {isSent && (
-          <span
-            className="retro-link text-red-800"
+          <button
+            className="retro-btn retro-btn-sm"
+            style={{ color: "#a00" }}
             onClick={(e) => {
               e.stopPropagation();
               deleteBottle(bottle!.id).catch((err) => console.error(err));
             }}
           >
-            [🗑 delete]
-          </span>
+            🗑 delete
+          </button>
         )}
         {!isSent && (
-          <span
-            className="retro-link text-red-800"
+          <button
+            className="retro-btn retro-btn-sm"
+            style={{ color: "#a00" }}
             onClick={(e) => {
               e.stopPropagation();
               reportBottle(bottle!.id).catch((err) => console.error(err));
             }}
           >
-            [! report]
-          </span>
+            ! report
+          </button>
         )}
         {!isSent && canReply && !replying && (
-          <>
-            {" "}
-            <span
-              className="retro-link"
-              onClick={(e) => {
-                e.stopPropagation();
-                setReplying(true);
-              }}
-            >
-              [↩ reply]
-            </span>
-          </>
+          <button
+            className="retro-btn retro-btn-sm"
+            onClick={(e) => {
+              e.stopPropagation();
+              setReplying(true);
+            }}
+          >
+            ↩ reply
+          </button>
         )}
       </div>
       )}
@@ -117,8 +116,8 @@ function MessageNode({
             }}
           />
           <div className="mt-1 flex gap-2 text-[13px]">
-            <span
-              className="retro-link"
+            <button
+              className="retro-btn retro-btn-sm"
               onClick={() => {
                 const t = replyText.trim();
                 if (!t) return;
@@ -128,16 +127,16 @@ function MessageNode({
               }}
             >
               send
-            </span>
-            <span
-              className="retro-link text-neutral-500"
+            </button>
+            <button
+              className="retro-btn retro-btn-sm"
               onClick={() => {
                 setReplying(false);
                 setReplyText("");
               }}
             >
               cancel
-            </span>
+            </button>
           </div>
         </div>
       )}
