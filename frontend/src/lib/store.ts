@@ -753,10 +753,17 @@ async function replyPrivateJwkCandidates(kid: string): Promise<JWK[]> {
     (await idbGet<ThreadRecord>(META_STORE, `caught:${parentId}`).catch(() => null));
   const target = parentRec?.plain?.reply;
   if (target?.x && target?.y) {
+    const matchIdx = out.findIndex((c) => c.x === target.x && c.y === target.y);
+    log(
+      `reply keys ${kid.slice(0, 24)}: ${out.length} candidates, parentPubkey match=${matchIdx}`,
+      matchIdx < 0 ? "warn" : ""
+    );
     out.sort(
       (a, b) =>
         Number(b.x === target.x && b.y === target.y) - Number(a.x === target.x && a.y === target.y)
     );
+  } else {
+    log(`reply keys ${kid.slice(0, 24)}: ${out.length} candidates, no parent reply pubkey`, "warn");
   }
   return out;
 }
@@ -1002,7 +1009,12 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
           // wrong candidate key — try the next
         }
       }
-      if (!rawSession || !plain) continue;
+      if (!rawSession || !plain) {
+        if (envelope.kid?.startsWith(REPLY_PREFIX)) {
+          log(`decrypt fail ${bottle.id.slice(0, 8)}: kid=${envelope.kid} tried=${privJwks.length} keys`, "warn");
+        }
+        continue;
+      }
       if (isSelf) {
         // Our own sent bottle: recover plaintext locally, no pickup claim.
         // Merge onto any existing record so repliesSeenAt/readAt/stats
