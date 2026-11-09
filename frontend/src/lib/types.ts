@@ -80,6 +80,9 @@ export interface ThreadRecord {
   threadLastAt?: number;
   repliesSeenAt?: number;
   readAt?: number;
+  // id of the newest reply bottle seen in this record's subtree — used to
+  // scroll+highlight the latest reply when a thread is opened.
+  lastReplyId?: string;
   // set when the author deleted the bottle server-side: the record stays as
   // a placeholder ("[message deleted]") with plaintext stripped locally.
   deleted?: boolean;

@@ -1143,6 +1143,13 @@ async function bumpThreadActivity(bottle: Bottle) {
         rec.lastChildAt = ts;
         dirty = true;
       }
+      // Track the newest reply in this subtree so opening the thread can
+      // scroll straight to it. Only replies count (parentId set) and only
+      // when this bottle is at least as new as the recorded activity.
+      if (bottle.parentId && ts >= (rec.threadLastAt || 0)) {
+        rec.lastReplyId = bottle.id;
+        dirty = true;
+      }
       if ((rec.threadLastAt || 0) < ts) {
         rec.threadLastAt = ts;
         dirty = true;

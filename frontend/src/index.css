@@ -224,6 +224,21 @@ hr.retro-hr {
   background: #f4f4f4;
 }
 
+/* brief yellow flash on the newest reply when a thread opens */
+.msg-highlight {
+  animation: msgHighlight 2.6s ease-out;
+}
+@keyframes msgHighlight {
+  0% {
+    background: #ffe98a;
+    box-shadow: 0 0 0 3px #f5c518;
+  }
+  100% {
+    background: transparent;
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
 /* bait line — your deposited keys as lures waiting for bites */
 .bait-line {
   display: flex;

@@ -280,6 +280,31 @@ export default function App() {
     return () => clearTimeout(t);
   }, [state.lastCatchAt]);
 
+  // Scroll to the newest reply and flash it when a thread detail opens.
+  // openThread fetches async, so poll briefly until the node exists.
+  const scrolledThreadRef = useRef("");
+  useEffect(() => {
+    const key = detailPath.join("/");
+    if (!detailPath.length || scrolledThreadRef.current === key) return;
+    scrolledThreadRef.current = key;
+    const rootId = detailPath[0];
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      const rec = state.records.find((r) => r.bottle?.id === rootId && r.lastReplyId);
+      const el = rec?.lastReplyId ? document.getElementById(`msg-${rec.lastReplyId}`) : null;
+      if (el) {
+        clearInterval(timer);
+        el.scrollIntoView({ block: "center" });
+        el.classList.add("msg-highlight");
+        setTimeout(() => el.classList.remove("msg-highlight"), 2700);
+      } else if (tries > 50) {
+        clearInterval(timer);
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, [detailPath, state.records]);
+
   useEffect(() => {
     let alive = true;
     const refresh = () => {

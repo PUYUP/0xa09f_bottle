@@ -36,6 +36,7 @@ function MessageNode({
 
   return (
     <div
+      id={bottle?.id ? `msg-${bottle.id}` : undefined}
       className={`msg bevel-in${isReply ? " reply" : ""}${isSent ? " sent" : ""}${onOpen ? " clickable" : ""}`}
       onClick={onOpen ? () => onOpen(node) : undefined}
     >
