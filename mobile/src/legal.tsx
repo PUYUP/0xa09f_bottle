@@ -59,7 +59,17 @@ export function TermsContent() {
         intercepted keys, or damages arising from use of the service.
       </p>
 
-      <h3>6. Changes</h3>
+      <h3>6. Subscription & billing</h3>
+      <p>
+        A free trial is provided for a limited period. Continued use after
+        the trial requires a paid subscription. Payments are processed by
+        Polar.sh as merchant of record — we never see or store your card,
+        email, or billing details. The only identifier exchanged with Polar
+        is your anonymous identity id (derived from your public key), which
+        cannot be reversed to identify you.
+      </p>
+
+      <h3>7. Changes</h3>
       <p>
         These terms may be updated. Continued use after changes constitutes
         acceptance.
@@ -325,6 +335,21 @@ export function PrivacyContent() {
         you no longer control (Settings → devices). If you believe a key is
         compromised, stop using it and generate a fresh identity — there is
         no way to "rotate" a leaked key retroactively.
+      </p>
+
+      <h3>Payments (Polar.sh)</h3>
+      <p>
+        If you subscribe, checkout and billing are handled entirely by
+        Polar.sh, our merchant of record. Polar receives and stores your
+        payment details, email, and billing information — we do not. The
+        only data we exchange with Polar is your anonymous identity id and
+        subscription status. We never receive, store, or process personal
+        data for payments.
+      </p>
+      <p>
+        Because our records link a subscription to an anonymous identity
+        id only, your payment history cannot be connected to your messages
+        or identity key by us.
       </p>
 
       <h3>Accounts & identity</h3>
