@@ -1134,6 +1134,11 @@ async function bumpThreadActivity(bottle: Bottle) {
       cur = next;
     }
   }
+  // Replies we authored ourselves must not count as inbound activity —
+  // otherwise sending a reply would light the unread badge on the root.
+  const ownReply = bottle.parentId
+    ? !!(await idbGet<ThreadRecord>(META_STORE, `sent:${bottle.id}`).catch(() => null))
+    : false;
   for (const tid of targets) {
     for (const prefix of ["caught:", "sent:"]) {
       const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${tid}`).catch(() => null);
@@ -1148,6 +1153,10 @@ async function bumpThreadActivity(bottle: Bottle) {
       // when this bottle is at least as new as the recorded activity.
       if (bottle.parentId && ts >= (rec.threadLastAt || 0)) {
         rec.lastReplyId = bottle.id;
+        dirty = true;
+      }
+      if (bottle.parentId && !ownReply && (rec.lastInboundAt || 0) < ts) {
+        rec.lastInboundAt = ts;
         dirty = true;
       }
       if ((rec.threadLastAt || 0) < ts) {

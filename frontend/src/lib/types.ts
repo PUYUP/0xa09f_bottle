@@ -83,6 +83,9 @@ export interface ThreadRecord {
   // id of the newest reply bottle seen in this record's subtree — used to
   // scroll+highlight the latest reply when a thread is opened.
   lastReplyId?: string;
+  // timestamp of the newest reply NOT authored by us — drives the unread
+  // badge so our own replies never mark a thread as new.
+  lastInboundAt?: number;
   // set when the author deleted the bottle server-side: the record stays as
   // a placeholder ("[message deleted]") with plaintext stripped locally.
   deleted?: boolean;

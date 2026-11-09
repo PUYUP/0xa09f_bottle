@@ -712,10 +712,17 @@ export default function App() {
                 (m.bottle?.id === bottleId || m.bottle?.rootId === bottleId)
             );
             const lastActivity = r.rec.threadLastAt || r.rec.lastChildAt || 0;
+            // Badge keys off inbound reply activity only — our own replies
+            // bump threadLastAt (for sort order) but must not look "new".
+            // Legacy records lack lastInboundAt: fall back to suppressing
+            // the badge when the newest reply is ours.
+            const lastReplyOurs = r.rec.lastReplyId
+              ? state.records.some((m) => m.id === `sent:${r.rec.lastReplyId}`)
+              : false;
+            const inboundAt =
+              r.rec.lastInboundAt ?? (lastReplyOurs ? 0 : lastActivity);
             const hasNewReplies =
-              weInThread &&
-              lastActivity > 0 &&
-              lastActivity * 1000 > (r.rec.repliesSeenAt || 0);
+              weInThread && inboundAt > 0 && inboundAt * 1000 > (r.rec.repliesSeenAt || 0);
             return (
               <div
                 key={r.rec.id}
