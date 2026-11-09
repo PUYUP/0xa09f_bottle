@@ -676,13 +676,19 @@ export default function App() {
             const isSent = r.rec.claim?.status === "SENT";
             const bottleId = r.rec.bottle?.id || "";
             // Badge: thread-level reply activity (any depth, via rootId)
-            // newer than what we've opened, on bottles we authored.
-            const authored = state.records.some(
-              (m) => m.id === `sent:${bottleId}`
+            // newer than what we've opened. Show it when we participate in
+            // the thread — authored the root OR sent any reply inside it —
+            // because only then can reply:<id> kids be proven and the new
+            // content actually decrypted. Replies to bottles we merely
+            // caught belong to their author and stay invisible to us.
+            const weInThread = state.records.some(
+              (m) =>
+                m.id.startsWith("sent:") &&
+                (m.bottle?.id === bottleId || m.bottle?.rootId === bottleId)
             );
             const lastActivity = r.rec.threadLastAt || r.rec.lastChildAt || 0;
             const hasNewReplies =
-              authored &&
+              weInThread &&
               lastActivity > 0 &&
               lastActivity * 1000 > (r.rec.repliesSeenAt || 0);
             return (
