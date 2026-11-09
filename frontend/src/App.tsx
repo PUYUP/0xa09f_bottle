@@ -230,7 +230,7 @@ export default function App() {
           <span className="text-blue-900">🌊</span> a09f
         </h1>
         <p className="text-xs italic text-neutral-700">
-          A quiet room for a crowded mind — est. 2025
+          A quiet cove for a crowded mind — est. 2025
         </p>
         <hr className="retro-hr" />
       </div>
