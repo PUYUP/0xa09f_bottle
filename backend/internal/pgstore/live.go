@@ -544,6 +544,10 @@ func (l *LiveStore) ListChildren(ctx context.Context, parentID string, limit int
 	return l.pg.ListChildren(ctx, parentID, limit)
 }
 
+func (l *LiveStore) ListThread(ctx context.Context, rootID string, limit int) ([]store.Bottle, error) {
+	return l.pg.ListThread(ctx, rootID, limit)
+}
+
 func (l *LiveStore) DeleteBottle(ctx context.Context, id string) error {
 	// The handler already tombstones via pg.TombstoneBottle; this is the
 	// store-side equivalent so the interface stays uniform. Idempotent.

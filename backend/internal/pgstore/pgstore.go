@@ -690,6 +690,49 @@ LIMIT $2`, parentID, limit)
 	return bottles, rows.Err()
 }
 
+// ListThread returns every bottle in a thread — the root plus all
+// descendants at any depth — oldest first. The recursive CTE walks
+// parent_id links so legacy replies without root_id are covered too.
+func (p *PGStore) ListThread(ctx context.Context, rootID string, limit int) ([]store.Bottle, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	rows, err := p.pool.Query(ctx, `
+WITH RECURSIVE thread AS (
+  SELECT id FROM bottles WHERE id = $1
+  UNION
+  SELECT b.id FROM bottles b JOIN thread t ON b.parent_id = t.id
+)
+SELECT b.id, b.created_at, b.depth, b.parent_id, b.root_id, b.max_deliveries, b.deliveries, b.status, b.payload_iv, b.ciphertext, b.envelopes, b.delivered_kids
+FROM bottles b
+WHERE b.id IN (SELECT id FROM thread)
+ORDER BY b.created_at ASC, b.id COLLATE "C" ASC
+LIMIT $2`, rootID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	bottles := make([]store.Bottle, 0, limit)
+	for rows.Next() {
+		var b store.Bottle
+		var envelopes, kids []byte
+		if err := rows.Scan(&b.ID, &b.CreatedAt, &b.Depth, &b.ParentID, &b.RootID, &b.MaxDeliveries,
+			&b.Deliveries, &b.Status, &b.PayloadIV, &b.Ciphertext, &envelopes, &kids); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(envelopes, &b.Envelopes); err != nil {
+			continue
+		}
+		_ = json.Unmarshal(kids, &b.DeliveredKids)
+		bottles = append(bottles, b)
+	}
+	return bottles, rows.Err()
+}
+
 // TombstoneBottle crypto-shreds a bottle in place: ciphertext, envelopes,
 // payload IV and delivered kids are wiped while the row (id, timestamps,
 // parent/root links, status='DELETED') survives so kid-filtered listings

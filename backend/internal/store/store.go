@@ -902,6 +902,35 @@ func (s *Store) ListChildren(ctx context.Context, parentID string, limit int) ([
 	return bottles, nil
 }
 
+// ListThread returns every bottle in a thread by breadth-first walking the
+// per-parent children index. Only covers the active set — Postgres covers
+// the archive, and the API layer merges both.
+func (s *Store) ListThread(ctx context.Context, rootID string, limit int) ([]Bottle, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	seen := map[string]bool{rootID: true}
+	out := make([]Bottle, 0, limit)
+	queue := []string{rootID}
+	for len(queue) > 0 && len(out) < limit {
+		id := queue[0]
+		queue = queue[1:]
+		kids, err := s.ListChildren(ctx, id, 1000)
+		if err != nil {
+			return nil, err
+		}
+		for _, b := range kids {
+			if seen[b.ID] {
+				continue
+			}
+			seen[b.ID] = true
+			out = append(out, b)
+			queue = append(queue, b.ID)
+		}
+	}
+	return out, nil
+}
+
 // PubkeysForKids resolves envelope recipient pubkeys from the live Redis
 // corpus for the given kids. Postgres is the primary registry, but a fresh
 // bottle's bottle_kids row only appears after syncBottlePG commits — during

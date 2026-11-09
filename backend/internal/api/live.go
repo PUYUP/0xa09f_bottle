@@ -29,6 +29,7 @@ type LiveStore interface {
 	ListBottles(ctx context.Context, limit, offset int) ([]store.Bottle, error)
 	ListBottlesCursor(ctx context.Context, limit int, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error)
 	ListChildren(ctx context.Context, parentID string, limit int) ([]store.Bottle, error)
+	ListThread(ctx context.Context, rootID string, limit int) ([]store.Bottle, error)
 	DeleteBottle(ctx context.Context, id string) error
 	Pickup(ctx context.Context, id, kid, tokenHash string) (store.PickupResult, error)
 

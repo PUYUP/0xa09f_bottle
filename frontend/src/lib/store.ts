@@ -715,6 +715,17 @@ export async function fetchBottleChildren(parentId: string, token: string, limit
   return bottles;
 }
 
+// fetchThreadBottles returns the whole thread subtree (root + all
+// descendants) in one request — the server filters by the pop token's kid
+// set, so only bottles addressed to kids we proved come back.
+export async function fetchThreadBottles(rootId: string, token: string, limit = 500): Promise<Bottle[]> {
+  const { bottles = [] } = await api<{ bottles?: Bottle[] }>(
+    `/api/bottles/${encodeURIComponent(rootId)}/thread?root=${encodeURIComponent(rootId)}&token=${encodeURIComponent(token)}&limit=${limit}`,
+    { auth: false }
+  );
+  return bottles;
+}
+
 const caughtThisSession = new Set<string>();
 
 // catchKidsParam builds the kid set for the inbox scan and SSE subscription:
@@ -1174,34 +1185,40 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
 // openThread fetches unseen replies for a bottle and marks the thread as
 // seen so the new-activity badge clears.
 export async function openThread(bottleId: string) {
-  await fetchThreadChildren(bottleId).catch(() => {});
-  // Replies we can decrypt only exist under bottles WE authored — and they
-  // can sit at any depth. Fetch children for every authored bottle in this
-  // thread that reports reply activity, so new replies surface without
-  // clicking each level. Server stats (childCount/threadCount) tell us
-  // which authored bottles actually have children.
   const opened =
     (await idbGet<ThreadRecord>(META_STORE, `sent:${bottleId}`).catch(() => null)) ??
     (await idbGet<ThreadRecord>(META_STORE, `caught:${bottleId}`).catch(() => null));
   const threadRoot = opened?.bottle?.rootId || bottleId;
+  // One shot: prove reply:<id> for every bottle we authored in this thread
+  // (replies to our bottles are the only decryptable ones) plus the inbox
+  // kid set, then fetch the whole subtree in a single request.
   const meta = await idbGetAll<ThreadRecord>(META_STORE).catch(() => [] as ThreadRecord[]);
-  const authored = meta.filter(
-    (m) =>
-      typeof m.id === "string" &&
-      m.id.startsWith("sent:") &&
-      m.bottle &&
-      (m.bottle.id === threadRoot || m.bottle.rootId === threadRoot) &&
-      ((m.childCount || 0) > 0 || (m.threadCount || 0) > 0)
-  );
-  for (const rec of authored.slice(0, 30)) {
-    const id = rec.bottle!.id;
-    if (id === bottleId) continue;
-    await fetchThreadChildren(id).catch(() => {});
+  const replyKids = meta
+    .filter(
+      (m) =>
+        typeof m.id === "string" &&
+        m.id.startsWith("sent:") &&
+        m.bottle &&
+        (m.bottle.id === threadRoot || m.bottle.rootId === threadRoot)
+    )
+    .map((m) => `${REPLY_PREFIX}${m.bottle!.id}`);
+  const inbox = await catchKidsParam();
+  const kids = [...(inbox ? inbox.split(",") : []), ...replyKids];
+  const token = await popTokenFor(kids).catch(() => null);
+  if (token) {
+    const bottles = await fetchThreadBottles(threadRoot, token).catch(() => []);
+    const byKid = keyByKidMap();
+    for (const b of bottles) {
+      await applyBottleStats(b);
+      await bumpThreadActivity(b);
+      await processBottle(b, byKid);
+    }
+    await renderInbox();
   }
   const seen = Date.now();
   // Mark both the opened bottle and its thread root as seen — the unread
   // badge lives on the root record's threadLastAt.
-  const ids = new Set([bottleId]);
+  const ids = new Set([bottleId, threadRoot]);
   for (const prefix of ["caught:", "sent:"]) {
     const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${bottleId}`).catch(() => null);
     if (rec?.bottle?.rootId) ids.add(rec.bottle.rootId);

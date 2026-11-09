@@ -334,6 +334,78 @@ func (s *Server) listBottleChildren(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"bottles": merged, "parentId": parentID})
 }
 
+// listBottleThread returns every bottle in a thread — root plus all
+// descendants — in one response, kid-filtered like the children endpoint.
+// Clients pass ?root=<threadRootId>; without it the path id is used.
+func (s *Server) listBottleThread(c fiber.Ctx) error {
+	rootID := c.Query("root")
+	if rootID == "" {
+		rootID = c.Params("id")
+	}
+	if !validBottleID(rootID) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid bottle id")
+	}
+	limit := 500
+	if raw := c.Query("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			limit = n
+		}
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	tokenKids, ok := s.store.PopTokenKids(c.Context(), c.Query("token"))
+	if !ok {
+		return fiber.NewError(fiber.StatusUnauthorized, "valid pop token required")
+	}
+	kidSet := make(map[string]struct{}, len(tokenKids))
+	for _, k := range tokenKids {
+		kidSet[k] = struct{}{}
+	}
+
+	seen := make(map[string]bool)
+	merged := make([]store.Bottle, 0, limit)
+	add := func(list []store.Bottle) {
+		for _, b := range list {
+			if seen[b.ID] || !bottleMatchesKids(b, kidSet) {
+				continue
+			}
+			seen[b.ID] = true
+			merged = append(merged, b)
+		}
+	}
+
+	live, err := s.store.ListThread(c.Context(), rootID, limit)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+	}
+	add(live)
+	pgCount := 0
+	if s.pg != nil && !s.pgBacked {
+		pgList, err := s.pg.ListThread(c.Context(), rootID, limit)
+		if err != nil {
+			log.Printf("pg list thread %s: %v", rootID, err)
+		} else {
+			pgCount = len(pgList)
+			add(pgList)
+		}
+	}
+	log.Printf("thread %s: tokenKids=%d live=%d pg=%d merged=%d", rootID, len(tokenKids), len(live), pgCount, len(merged))
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].CreatedAt != merged[j].CreatedAt {
+			return merged[i].CreatedAt < merged[j].CreatedAt
+		}
+		return merged[i].ID < merged[j].ID
+	})
+	if len(merged) > limit {
+		merged = merged[:limit]
+	}
+	return c.JSON(fiber.Map{"bottles": merged, "rootId": rootID})
+}
+
 func parseKidFilter(raw string) map[string]struct{} {
 	if raw == "" {
 		return nil
