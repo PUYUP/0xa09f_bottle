@@ -800,6 +800,9 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
     if (!toProve.length) {
       toProve.push(kids.find((k) => k.startsWith(SELF_PREFIX)) ?? kids[0]);
     }
+    if (toProve.some((k) => k.startsWith(REPLY_PREFIX))) {
+      log(`pop proof: attempt=${attempt} toProve=${toProve.length} replyKids=[${toProve.filter((k) => k.startsWith(REPLY_PREFIX)).join(",")}]`, "warn");
+    }
     // The ECDH shared secret per kid is time-invariant — cache it so repeat
     // proof rounds only recompute the cheap SHA-256 digest, not key agreement.
     await Promise.all(
@@ -826,6 +829,10 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
         }
       })
     );
+    if (toProve.some((k) => k.startsWith(REPLY_PREFIX))) {
+      const replyProofs = Object.keys(proofs).filter((k) => k.startsWith(REPLY_PREFIX));
+      log(`pop proof: generated ${Object.keys(proofs).length}/${toProve.length} proofs, replyProofs=[${replyProofs.join(",")}]`, replyProofs.length ? "" : "warn");
+    }
     const { token, kids: verifiedKids, expiresIn } = await api<{
       token?: string;
       kids?: string[];
