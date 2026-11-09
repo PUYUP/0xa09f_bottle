@@ -16,6 +16,7 @@ func init() {
 	_ = mime.AddExtensionType(".js", "text/javascript; charset=utf-8")
 	_ = mime.AddExtensionType(".css", "text/css; charset=utf-8")
 	_ = mime.AddExtensionType(".html", "text/html; charset=utf-8")
+	_ = mime.AddExtensionType(".svg", "image/svg+xml")
 }
 
 func bindJSON(c fiber.Ctx, v any) error {
@@ -37,6 +38,9 @@ func (s *Server) serveStatic(c fiber.Ctx) error {
 	}
 	if raw == "/status" {
 		return serveFile(c, "status.html")
+	}
+	if raw == "/favicon.svg" {
+		return serveFile(c, "favicon.svg")
 	}
 	if raw == "/legacy" {
 		return c.Redirect().To("/legacy/")
