@@ -763,58 +763,81 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
     return cached.token;
   }
   const serverPub = await getServerPub();
-  const proofs: Record<string, { ts: number; proof: string }> = {};
-  // The server remembers kids it has already verified under this identity
-  // (bound via the self:<userId> proof), so we only re-prove kids it has
-  // never seen — usually just newly deposited bait. When everything is
-  // already verified we still send one proof (self preferred) because the
-  // server requires at least one valid proof per issuance.
-  const knownVerified = await loadPopVerified();
-  const toProve = kids.filter((k) => !knownVerified.has(k));
-  if (!toProve.length) {
-    toProve.push(kids.find((k) => k.startsWith(SELF_PREFIX)) ?? kids[0]);
-  }
-  // The ECDH shared secret per kid is time-invariant — cache it so repeat
-  // proof rounds only recompute the cheap SHA-256 digest, not key agreement.
-  await Promise.all(
-    toProve.map(async (kid) => {
-      const priv = await privateJwkForKid(kid);
-      if (!priv) return;
-      try {
-        let shared = sharedBitsCache.get(kid);
-        if (!shared) {
-          const privKey = await crypto.subtle.importKey(
-            "jwk",
-            priv,
-            { name: "ECDH", namedCurve: "P-256" },
-            false,
-            ["deriveBits"]
-          );
-          shared = await crypto.subtle.deriveBits({ name: "ECDH", public: serverPub }, privKey, 256);
-          sharedBitsCache.set(kid, shared);
+
+  // The server's verified-kid memory is ephemeral (Redis popset, 7d TTL,
+  // lost on rebuild) while our pop:verified cache is persistent — when they
+  // diverge the first token covers only self: and the inbox looks empty.
+  // So after each issuance, if the token doesn't cover every requested kid,
+  // retry once forcing proofs for the missing kids (+ self: to re-bind the
+  // identity) instead of waiting for the next refresh to self-heal.
+  let forceKids: Set<string> | null = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const proofs: Record<string, { ts: number; proof: string }> = {};
+    // The server remembers kids it has already verified under this identity
+    // (bound via the self:<userId> proof), so we only re-prove kids it has
+    // never seen — usually just newly deposited bait. When everything is
+    // already verified we still send one proof (self preferred) because the
+    // server requires at least one valid proof per issuance.
+    const knownVerified = forceKids ? new Set<string>() : await loadPopVerified();
+    const toProve = forceKids
+      ? [...forceKids]
+      : kids.filter((k) => !knownVerified.has(k));
+    if (!toProve.length) {
+      toProve.push(kids.find((k) => k.startsWith(SELF_PREFIX)) ?? kids[0]);
+    }
+    // The ECDH shared secret per kid is time-invariant — cache it so repeat
+    // proof rounds only recompute the cheap SHA-256 digest, not key agreement.
+    await Promise.all(
+      toProve.map(async (kid) => {
+        const priv = await privateJwkForKid(kid);
+        if (!priv) return;
+        try {
+          let shared = sharedBitsCache.get(kid);
+          if (!shared) {
+            const privKey = await crypto.subtle.importKey(
+              "jwk",
+              priv,
+              { name: "ECDH", namedCurve: "P-256" },
+              false,
+              ["deriveBits"]
+            );
+            shared = await crypto.subtle.deriveBits({ name: "ECDH", public: serverPub }, privKey, 256);
+            sharedBitsCache.set(kid, shared);
+          }
+          const ts = Math.floor(Date.now() / 1000);
+          proofs[kid] = { ts, proof: await kidProofDigest(shared, kid, ts) };
+        } catch {
+          // unprovable kid — server will simply not verify it
         }
-        const ts = Math.floor(Date.now() / 1000);
-        proofs[kid] = { ts, proof: await kidProofDigest(shared, kid, ts) };
-      } catch {
-        // unprovable kid — server will simply not verify it
-      }
-    })
-  );
-  const { token, kids: verifiedKids, expiresIn } = await api<{
-    token?: string;
-    kids?: string[];
-    expiresIn?: number;
-  }>("/api/auth/pop-token", { method: "POST", body: JSON.stringify({ kids, proofs }) });
-  if (!token) return null;
-  popTokens.set(kidsKey, {
-    token,
-    exp: Date.now() + ((expiresIn || 600) - 60) * 1000,
-    verified: new Set(verifiedKids || []),
-  });
-  // Server is authoritative for the verified set — replace, don't merge,
-  // so a flushed server-side set self-heals on the next round.
-  await idbPut(KV_STORE, { id: "pop:verified", kids: verifiedKids || [] }).catch(() => {});
-  return token;
+      })
+    );
+    const { token, kids: verifiedKids, expiresIn } = await api<{
+      token?: string;
+      kids?: string[];
+      expiresIn?: number;
+    }>("/api/auth/pop-token", { method: "POST", body: JSON.stringify({ kids, proofs }) });
+    if (!token) return null;
+    const verified = new Set(verifiedKids || []);
+    popTokens.set(kidsKey, {
+      token,
+      exp: Date.now() + ((expiresIn || 600) - 60) * 1000,
+      verified,
+    });
+    // Server is authoritative for the verified set — replace, don't merge,
+    // so a flushed server-side set self-heals on the next round.
+    await idbPut(KV_STORE, { id: "pop:verified", kids: verifiedKids || [] }).catch(() => {});
+    const missing = kids.filter((k) => !verified.has(k));
+    if (!missing.length) return token;
+    // Force proofs for exactly the kids the server couldn't cover — plus
+    // self: so the identity binding (and popset expansion) is re-established
+    // even when the server forgot everything.
+    forceKids = new Set(missing);
+    const selfKid = kids.find((k) => k.startsWith(SELF_PREFIX));
+    if (selfKid) forceKids.add(selfKid);
+  }
+  // Second token still doesn't cover every kid (e.g. an unprovable legacy
+  // key) — return it anyway; the covered subset still works.
+  return popTokens.get(kidsKey)?.token ?? null;
 }
 
 async function loadPopVerified(): Promise<Set<string>> {
