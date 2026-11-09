@@ -14,6 +14,7 @@ import "@ionic/react/css/flex-utils.css";
 import "@ionic/react/css/display.css";
 
 import App from "./App";
+import "./global.css";
 
 setupIonicReact();
 

@@ -7,75 +7,61 @@ import {
   IonContent,
   IonButtons,
   IonButton,
-  IonTextarea,
   IonInput,
-  IonList,
   IonItem,
   IonLabel,
-  IonNote,
-  IonAlert,
   IonSpinner,
   IonIcon,
   IonModal,
-  IonFooter,
+  IonTabBar,
+  IonTabButton,
+  IonTabs,
+  IonTab,
+  IonBadge,
+  IonFab,
+  IonFabButton,
 } from "@ionic/react";
-import { send, refresh, fish, cloudUpload, cloudDownload, chatbox, trash, helpCircle, phonePortraitOutline } from "ionicons/icons";
+import {
+  send,
+  refresh,
+  helpCircle,
+  cloudDownload,
+  chatboxOutline,
+  fishOutline,
+  personOutline,
+} from "ionicons/icons";
 import { getState, subscribe } from "@shared/store";
 import {
   init,
   dropBottle,
   checkBottles,
   generateAndDeposit,
-  buildThreads,
-  replyBottle,
-  reportBottle,
-  deleteBottle,
-  deleteAccount,
-  changeUsernameUI,
+  log,
+  claimUsernameUI,
   exportVault,
   importVaultFile,
-  readTTLSeconds,
-  log,
-  fetchThreadChildren,
-  openThread,
-  fetchDevices,
-  revokeDevice,
   vaultReminderState,
   snoozeVaultReminder,
 } from "@shared/store";
-import type { ThreadNode, DeviceInfo } from "@shared/store";
-import type { ThreadRecord, IdentityRecord } from "@shared/types";
-import { MAX_THREAD_DEPTH } from "@shared/crypto";
 import { getIdentity, randomUsername as genName } from "@shared/identity";
-import { claimUsernameUI } from "@shared/store";
+import { hasUnreadReplies } from "./lib/unread";
 import { TermsContent, PrivacyContent, HowItWorksContent } from "./legal";
-
-interface Row {
-  node: ThreadNode;
-  depth: number;
-}
-
-function flatten(node: ThreadNode, depth: number, out: Row[]) {
-  out.push({ node, depth });
-  for (const c of node.children) flatten(c, depth + 1, out);
-}
+import { CatchPage } from "./pages/CatchPage";
+import { BaitPage } from "./pages/BaitPage";
+import { AccountPage } from "./pages/AccountPage";
+import { CastModal } from "./components/CastModal";
+import type { IdentityRecord } from "@shared/types";
 
 export default function App() {
   const state = useSyncExternalStore(subscribe, getState);
-  const [message, setMessage] = useState("");
-  const [threads, setThreads] = useState<ThreadNode[]>([]);
-  const [replyTarget, setReplyTarget] = useState<ThreadRecord | null>(null);
-  const [baitOpen, setBaitOpen] = useState(false);
+  const [castOpen, setCastOpen] = useState(false);
   const [legal, setLegal] = useState<"terms" | "privacy" | "how" | null>(null);
-  const [devicesOpen, setDevicesOpen] = useState(false);
-  const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
   const [vaultDue, setVaultDue] = useState(false);
   const [busy, setBusy] = useState(false);
   const [identity, setIdentity] = useState<IdentityRecord | null>(null);
   const [claimName, setClaimName] = useState("");
   const [catchToast, setCatchToast] = useState(false);
   const autoBaited = useRef(false);
-  const fileRef = useRef<HTMLInputElement>(null);
   const gateFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -84,13 +70,6 @@ export default function App() {
       setIdentity(id);
       setClaimName((n) => n || genName());
     }).catch(() => {});
-    const iv = setInterval(() => {
-      buildThreads()
-        .then((t) => setThreads(t.roots))
-        .catch(() => {});
-    }, 4000);
-    buildThreads().then((t) => setThreads(t.roots)).catch(() => {});
-    return () => clearInterval(iv);
   }, []);
 
   // Onboarding: brand-new users get three starter baits cast automatically.
@@ -121,60 +100,16 @@ export default function App() {
     return () => clearTimeout(t);
   }, [state.lastCatchAt]);
 
-  const rows: Row[] = [];
-  for (const r of threads) flatten(r, 0, rows);
-  const sentIds = new Set(
-    state.records
-      .filter((r) => r.id.startsWith("sent:"))
-      .map((r) => r.bottle?.id)
-      .filter(Boolean) as string[]
-  );
-
-  // Lazy reply loading: the server reports childCount per bottle, so any
-  // authored node whose direct children aren't all local yet gets a
-  // per-thread fetch — capped per cycle to stay gentle.
-  const fetchingRef = useRef(false);
-  useEffect(() => {
-    if (fetchingRef.current) return;
-    const authored = new Set(
-      state.records
-        .filter((r) => r.id.startsWith("sent:"))
-        .map((r) => r.bottle?.id)
-        .filter(Boolean) as string[]
-    );
-    const missing: string[] = [];
-    const walk = (n: ThreadNode) => {
-      const bid = n.rec.bottle?.id;
-      if (bid && authored.has(bid) && (n.rec.childCount || 0) > n.children.length) {
-        missing.push(bid);
-      }
-      n.children.forEach(walk);
-    };
-    threads.forEach(walk);
-    if (!missing.length) return;
-    fetchingRef.current = true;
-    (async () => {
-      for (const id of missing.slice(0, 10)) {
-        await fetchThreadChildren(id).catch(() => {});
-      }
-      fetchingRef.current = false;
-      buildThreads().then((t) => setThreads(t.roots)).catch(() => {});
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threads, state.records]);
-
   const run = (fn: () => Promise<void>) => {
     setBusy(true);
-    fn()
+    return fn()
       .catch((e) => log((e as Error).message, "err"))
       .finally(() => setBusy(false));
   };
 
-  const cast = () =>
-    run(async () => {
-      await dropBottle(message, "86400");
-      setMessage("");
-    });
+  const unread = state.records.filter(
+    (r) => !r.bottle?.parentId && hasUnreadReplies(r, state.records)
+  ).length;
 
   // Mandatory username gate — same policy as the web client.
   if (identity && !identity.username) {
@@ -260,19 +195,7 @@ export default function App() {
             </div>
           </div>
         </IonContent>
-        <IonModal isOpen={legal === "how"} onDidDismiss={() => setLegal(null)}>
-          <IonHeader>
-            <IonToolbar>
-              <IonTitle>how it works</IonTitle>
-              <IonButtons slot="end">
-                <IonButton onClick={() => setLegal(null)}>close</IonButton>
-              </IonButtons>
-            </IonToolbar>
-          </IonHeader>
-          <IonContent className="ion-padding" style={{ fontSize: 14, lineHeight: 1.5 }}>
-            <HowItWorksContent />
-          </IonContent>
-        </IonModal>
+        <LegalModal kind={legal} onClose={() => setLegal(null)} />
       </IonApp>
     );
   }
@@ -290,417 +213,135 @@ export default function App() {
         </IonToolbar>
       </IonHeader>
 
-      <IonContent className="ion-padding">
-        {/* status */}
-        <IonNote>
-          {state.activePoolKeys ?? "…"}/{5} bait in pool · e2ee on
-        </IonNote>
-
-        {vaultDue && (
-          <IonItem
-            lines="full"
-            className="ion-margin-top"
-            style={{ "--background": "#fff3cd", "--color": "#333" } as React.CSSProperties}
-          >
-            <IonLabel>
-              <strong>🔑 backup your vault</strong>
-              <p>no export yet — lose this device and every message is gone forever</p>
-            </IonLabel>
-            <IonButton
-              slot="end"
-              size="small"
-              onClick={() =>
-                exportVault()
-                  .then(() => vaultReminderState().then((r) => setVaultDue(r.due)))
-                  .catch((e) => log(`export: ${(e as Error).message}`, "err"))
-              }
-            >
-              export
-            </IonButton>
-            <IonButton
-              slot="end"
-              size="small"
-              fill="clear"
-              onClick={async () => {
-                await snoozeVaultReminder();
-                setVaultDue(false);
-              }}
-            >
-              later
-            </IonButton>
-          </IonItem>
-        )}
-
-        {/* composer */}
-        <IonItem lines="none" className="ion-margin-top">
-          <IonTextarea
-            placeholder="write something for the sea…"
-            value={message}
-            autoGrow
-            onIonInput={(e) => setMessage(e.detail.value ?? "")}
-          />
-        </IonItem>
-        <IonButton expand="block" onClick={cast} disabled={busy || !message.trim()}>
-          <IonIcon icon={send} slot="start" />
-          cast it
-        </IonButton>
-
-        {/* actions */}
-        <div className="ion-margin-top" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <IonButton size="small" fill="outline" onClick={() => setBaitOpen(true)}>
-            <IonIcon icon={fish} slot="start" />
-            throw bait
-          </IonButton>
-          <IonButton
-            size="small"
-            fill="outline"
-            onClick={() => fileRef.current?.click()}
-          >
-            <IonIcon icon={cloudUpload} slot="start" />
-            vault
-          </IonButton>
-          <IonButton
-            size="small"
-            fill="outline"
-            onClick={() =>
-              exportVault().catch((e) => log(`export: ${(e as Error).message}`, "err"))
-            }
-          >
-            <IonIcon icon={cloudDownload} slot="start" />
-            export
-          </IonButton>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="application/json"
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (f) importVaultFile(f).catch((err) => log(`import: ${(err as Error).message}`, "err"));
-            }}
-          />
-          {identity?.username && (
-            <IonButton
-              size="small"
-              fill="outline"
-              onClick={() => {
-                const v = window.prompt("new username (once every 7 days)", identity.username || "");
-                if (!v?.trim()) return;
-                changeUsernameUI(v.trim())
-                  .then(() => getIdentity().then(setIdentity))
-                  .catch((e) => log(`rename: ${(e as Error).message}`, "err"));
-              }}
-            >
-              rename
-            </IonButton>
-          )}
-          {identity?.username && (
-            <IonButton
-              size="small"
-              fill="outline"
-              onClick={() => {
-                setDevices(null);
-                setDevicesOpen(true);
-                fetchDevices()
-                  .then(setDevices)
-                  .catch((e) => {
-                    log(`devices: ${(e as Error).message}`, "err");
-                    setDevices([]);
-                  });
-              }}
-            >
-              <IonIcon icon={phonePortraitOutline} slot="start" />
-              devices
-            </IonButton>
-          )}
-          {identity?.username && (
-            <IonButton
-              size="small"
-              fill="clear"
-              color="danger"
-              onClick={() => {
-                if (!window.confirm(`delete @${identity.username} permanently? this erases your username, blocks, reports and sync data. messages already delivered to others stay readable by them.`)) return;
-                if (!window.confirm("are you absolutely sure? this cannot be undone.")) return;
-                deleteAccount().catch((e) => log(`delete account: ${(e as Error).message}`, "err"));
-              }}
-            >
-              delete account
-            </IonButton>
-          )}
-        </div>
-
-        {/* catch list */}
-        <IonList inset className="ion-margin-top">
-          {rows.length === 0 && (
-            <IonItem lines="none">
-              <IonLabel className="ion-text-center ion-padding">
-                {state.ready ? "the sea is quiet — nothing on the line yet" : "booting…"}
-              </IonLabel>
-            </IonItem>
-          )}
-          {rows.map(({ node, depth }) => {
-            const { bottle, plain, claim } = node.rec;
-            const isSent = claim?.status === "SENT";
-            const canReply =
-              !!plain?.reply &&
-              (bottle?.depth || 1) < MAX_THREAD_DEPTH &&
-              !isSent &&
-              !sentIds.has(bottle?.id || "");
-            const authored = sentIds.has(bottle?.id || "");
-            const lastActivity = node.rec.threadLastAt || node.rec.lastChildAt || 0;
-            const hasNewReplies =
-              authored &&
-              lastActivity > 0 &&
-              lastActivity * 1000 > (node.rec.repliesSeenAt || 0);
-            return (
+      <IonTabs>
+        <IonTab tab="catch">
+          <div className="tab-scroll ion-padding">
+            {vaultDue && (
               <IonItem
-                key={node.rec.id}
                 lines="full"
-                button
-                onClick={() => {
-                  const bid = bottle?.id;
-                  if (bid) openThread(bid).catch(() => {});
-                }}
+                className="ion-margin-top"
+                style={{ "--background": "#fff3cd", "--color": "#333" } as React.CSSProperties}
               >
                 <IonLabel>
-                  <div style={{ paddingLeft: depth * 16 }}>
-                    {node.rec.deleted ? (
-                      <p style={{ margin: "4px 0", fontStyle: "italic", color: "var(--ion-color-medium)" }}>
-                        [this message was deleted]
-                      </p>
-                    ) : (
-                      <p style={{ margin: "4px 0", whiteSpace: "pre-wrap" }}>{plain?.text}</p>
-                    )}
-                    <IonNote>
-                      {isSent ? "yours" : claim?.status || "CLAIMED"} ·{" "}
-                      {claim?.deliveries ?? "?"}/{bottle?.maxDeliveries} ·{" "}
-                      {(bottle?.id || "").slice(0, 8)}
-                      {depth > 0 && " ↳"}
-                      {(() => {
-                        const total = node.rec.childCount || 0;
-                        const loaded = node.children.length;
-                        if (total > loaded)
-                          return <span style={{ color: "#1a5276" }}> · 💬 {total} repl{total === 1 ? "y" : "ies"} ▸</span>;
-                        if (loaded > 0)
-                          return <span style={{ color: "#1a5276" }}> · 💬 {loaded} repl{loaded === 1 ? "y" : "ies"}</span>;
-                        return null;
-                      })()}
-                      {hasNewReplies && (
-                        <span style={{ color: "#c0392b", fontWeight: 700 }}> ● new</span>
-                      )}
-                    </IonNote>
-                    {!isSent && !node.rec.deleted && (
-                      <div style={{ marginTop: 4, display: "flex", gap: 12 }}>
-                        {canReply && (
-                          <IonButton
-                            size="small"
-                            fill="clear"
-                            onClick={() => setReplyTarget(node.rec)}
-                          >
-                            <IonIcon icon={chatbox} slot="start" />
-                            reply
-                          </IonButton>
-                        )}
-                        <IonButton
-                          size="small"
-                          fill="clear"
-                          color="danger"
-                          onClick={() =>
-                            reportBottle(bottle!.id).catch((e) =>
-                              log(`report: ${(e as Error).message}`, "err")
-                            )
-                          }
-                        >
-                          report
-                        </IonButton>
-                      </div>
-                    )}
-                    {isSent && bottle && !node.rec.deleted && (
-                      <div style={{ marginTop: 4 }}>
-                        <IonButton
-                          size="small"
-                          fill="clear"
-                          color="danger"
-                          onClick={() =>
-                            deleteBottle(bottle.id).catch((e: Error) =>
-                              log(`delete: ${e.message}`, "err")
-                            )
-                          }
-                        >
-                          <IonIcon icon={trash} slot="start" />
-                          delete
-                        </IonButton>
-                      </div>
-                    )}
-                  </div>
+                  <strong>🔑 backup your vault</strong>
+                  <p>no export yet — lose this device and every message is gone forever</p>
+                </IonLabel>
+                <IonButton
+                  slot="end"
+                  size="small"
+                  onClick={() =>
+                    exportVault()
+                      .then(() => vaultReminderState().then((r) => setVaultDue(r.due)))
+                      .catch((e) => log(`export: ${(e as Error).message}`, "err"))
+                  }
+                >
+                  export
+                </IonButton>
+                <IonButton
+                  slot="end"
+                  size="small"
+                  fill="clear"
+                  onClick={async () => {
+                    await snoozeVaultReminder();
+                    setVaultDue(false);
+                  }}
+                >
+                  later
+                </IonButton>
+              </IonItem>
+            )}
+
+            <CatchPage />
+
+            {busy && (
+              <div className="ion-text-center ion-padding">
+                <IonSpinner name="crescent" />
+              </div>
+            )}
+
+            {/* system log */}
+            {state.logs.length > 0 && (
+              <IonItem lines="none" className="ion-no-padding">
+                <IonLabel>
+                  {state.logs.slice(0, 5).map((l) => (
+                    <p key={l.id} style={{ fontSize: 12, margin: "2px 0" }}>
+                      [{l.time}] {l.msg}
+                    </p>
+                  ))}
                 </IonLabel>
               </IonItem>
-            );
-          })}
-        </IonList>
-
-        {busy && (
-          <div className="ion-text-center ion-padding">
-            <IonSpinner name="crescent" />
+            )}
           </div>
-        )}
+        </IonTab>
 
-        {/* system log */}
-        {state.logs.length > 0 && (
-          <IonList inset>
-            {state.logs.slice(0, 5).map((l) => (
-              <IonItem key={l.id} lines="none" className="ion-no-padding">
-                <IonNote>
-                  [{l.time}] {l.msg}
-                </IonNote>
-              </IonItem>
-            ))}
-          </IonList>
-        )}
-      </IonContent>
+        <IonTab tab="bait">
+          <div className="tab-scroll ion-padding">
+            <BaitPage />
+          </div>
+        </IonTab>
 
-      {/* throw bait dialog */}
-      <IonAlert
-        isOpen={baitOpen}
-        onDidDismiss={() => setBaitOpen(false)}
-        header="throw bait"
-        message="publish a fresh keypair into the pool so strangers can cast sealed catches to it"
-        inputs={[
-          {
-            name: "ttl",
-            type: "number",
-            value: "86400",
-            placeholder: "ttl seconds",
-          },
-        ]}
-        buttons={[
-          { text: "cancel", role: "cancel" },
-          {
-            text: "throw it",
-            handler: (data) => {
-              const v = String(data?.values?.ttl ?? "86400");
-              if (!readTTLSeconds(v)) {
-                log("invalid ttl", "warn");
-                return false;
-              }
-              run(() => generateAndDeposit(v));
-            },
-          },
-        ]}
-      />
+        <IonTab tab="account">
+          <div className="tab-scroll ion-padding">
+            <AccountPage identity={identity} onIdentity={setIdentity} onLegal={setLegal} />
+          </div>
+        </IonTab>
 
-      {/* reply dialog */}
-      <IonAlert
-        isOpen={!!replyTarget}
-        onDidDismiss={() => setReplyTarget(null)}
-        header="reply"
-        inputs={[
-          {
-            name: "text",
-            type: "textarea",
-            placeholder: "write your reply…",
-          },
-        ]}
-        buttons={[
-          { text: "cancel", role: "cancel" },
-          {
-            text: "send",
-            handler: (data) => {
-              const t = String(data?.values?.text ?? "").trim();
-              if (!t || !replyTarget) return false;
-              run(() => replyBottle(replyTarget, t));
-            },
-          },
-        ]}
+        <IonTabBar slot="bottom">
+          <IonTabButton tab="catch">
+            <IonIcon icon={chatboxOutline} />
+            <IonLabel>catch</IonLabel>
+            {unread > 0 && (
+              <IonBadge color="danger" slot="end">
+                {unread > 99 ? "99+" : unread}
+              </IonBadge>
+            )}
+          </IonTabButton>
+          <IonTabButton tab="bait">
+            <IonIcon icon={fishOutline} />
+            <IonLabel>bait</IonLabel>
+          </IonTabButton>
+          <IonTabButton tab="account">
+            <IonIcon icon={personOutline} />
+            <IonLabel>account</IonLabel>
+          </IonTabButton>
+        </IonTabBar>
+
+        {/* cast FAB — floats above the tab bar */}
+        <IonFab
+          vertical="bottom"
+          horizontal="center"
+          style={{ bottom: "calc(72px + env(safe-area-inset-bottom, 0px))" }}
+        >
+          <IonFabButton onClick={() => setCastOpen(true)} aria-label="cast a message">
+            <IonIcon icon={send} />
+          </IonFabButton>
+        </IonFab>
+      </IonTabs>
+
+      <CastModal
+        open={castOpen}
+        busy={busy}
+        onClose={() => setCastOpen(false)}
+        onCast={(text) =>
+          run(async () => {
+            await dropBottle(text, "86400");
+          })
+        }
       />
 
       {/* terms & privacy */}
-      <IonModal isOpen={legal !== null} onDidDismiss={() => setLegal(null)}>
-        <IonHeader>
-          <IonToolbar>
-            <IonTitle>
-              {legal === "terms" ? "terms of service" : legal === "privacy" ? "privacy policy" : "how it works"}
-            </IonTitle>
-            <IonButtons slot="end">
-              <IonButton onClick={() => setLegal(null)}>close</IonButton>
-            </IonButtons>
-          </IonToolbar>
-        </IonHeader>
-        <IonContent className="ion-padding" style={{ fontSize: 14, lineHeight: 1.5 }}>
-          {legal === "terms" ? <TermsContent /> : legal === "privacy" ? <PrivacyContent /> : <HowItWorksContent />}
-        </IonContent>
-      </IonModal>
-
-      {/* devices */}
-      <IonModal isOpen={devicesOpen} onDidDismiss={() => setDevicesOpen(false)}>
-        <IonHeader>
-          <IonToolbar>
-            <IonTitle>devices</IonTitle>
-            <IonButtons slot="end">
-              <IonButton onClick={() => setDevicesOpen(false)}>close</IonButton>
-            </IonButtons>
-          </IonToolbar>
-        </IonHeader>
-        <IonContent className="ion-padding">
-          <IonNote>
-            devices that have signed in with this identity. revoking cuts off that device within a
-            minute — it keeps its keys but can no longer prove they are yours.
-          </IonNote>
-          <IonList inset>
-            {devices === null && (
-              <IonItem lines="none">
-                <IonSpinner slot="start" />
-                <IonLabel>loading…</IonLabel>
-              </IonItem>
-            )}
-            {devices?.length === 0 && (
-              <IonItem lines="none">
-                <IonLabel>no devices registered yet</IonLabel>
-              </IonItem>
-            )}
-            {devices?.map((d) => (
-              <IonItem key={d.deviceId} lines="full">
-                <IonLabel>
-                  <h3 style={{ fontFamily: "monospace" }}>{d.deviceId.slice(0, 8)}…</h3>
-                  <p>
-                    {d.userAgent ? d.userAgent.slice(0, 48) : "unknown client"} · seen{" "}
-                    {new Date(d.lastSeen * 1000).toLocaleString()}
-                    {d.current && " · this device"}
-                    {d.revoked && " · revoked"}
-                  </p>
-                </IonLabel>
-                {!d.current && !d.revoked && (
-                  <IonButton
-                    slot="end"
-                    size="small"
-                    fill="outline"
-                    color="danger"
-                    onClick={() => {
-                      if (!window.confirm(`revoke device ${d.deviceId.slice(0, 8)}…? it will lose access within a minute.`)) return;
-                      revokeDevice(d.deviceId)
-                        .then(() => fetchDevices().then(setDevices))
-                        .catch((e) => log(`revoke: ${(e as Error).message}`, "err"));
-                    }}
-                  >
-                    revoke
-                  </IonButton>
-                )}
-              </IonItem>
-            ))}
-          </IonList>
-        </IonContent>
-      </IonModal>
+      <LegalModal kind={legal} onClose={() => setLegal(null)} />
 
       {catchToast && (
         <div
           onClick={() => {
             setCatchToast(false);
+            (document.querySelector("ion-tabs") as HTMLIonTabsElement | null)?.select("catch");
             run(checkBottles);
           }}
           style={{
             position: "fixed",
-            bottom: 90,
+            bottom: "calc(150px + env(safe-area-inset-bottom, 0px))",
             left: "50%",
             transform: "translateX(-50%)",
             zIndex: 9999,
@@ -716,42 +357,32 @@ export default function App() {
           🎣 something bit! — tap to check catch
         </div>
       )}
-
-      <IonFooter>
-        <IonToolbar>
-          <div
-            className="ion-text-center ion-padding-vertical"
-            style={{ fontSize: 12, display: "flex", justifyContent: "center", gap: 16 }}
-          >
-            <span onClick={() => setLegal("how")} style={{ cursor: "pointer", color: "var(--ion-color-primary)" }}>
-              how it works
-            </span>
-            <span style={{ color: "var(--ion-color-medium)" }}>·</span>
-            <span onClick={() => setLegal("terms")} style={{ cursor: "pointer", color: "var(--ion-color-primary)" }}>
-              terms
-            </span>
-            <span style={{ color: "var(--ion-color-medium)" }}>·</span>
-            <span onClick={() => setLegal("privacy")} style={{ cursor: "pointer", color: "var(--ion-color-primary)" }}>
-              privacy
-            </span>
-          </div>
-          <div
-            className="ion-text-center"
-            style={{ fontSize: 11, paddingBottom: 8, color: "var(--ion-color-medium)" }}
-          >
-            your IP is visible to the relay — use{" "}
-            <a
-              href="https://www.torproject.org/"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: "var(--ion-color-primary)" }}
-            >
-              Tor Browser
-            </a>{" "}
-            for untracked browsing
-          </div>
-        </IonToolbar>
-      </IonFooter>
     </IonApp>
+  );
+}
+
+function LegalModal({
+  kind,
+  onClose,
+}: {
+  kind: "terms" | "privacy" | "how" | null;
+  onClose: () => void;
+}) {
+  return (
+    <IonModal isOpen={kind !== null} onDidDismiss={onClose}>
+      <IonHeader>
+        <IonToolbar>
+          <IonTitle>
+            {kind === "terms" ? "terms of service" : kind === "privacy" ? "privacy policy" : "how it works"}
+          </IonTitle>
+          <IonButtons slot="end">
+            <IonButton onClick={onClose}>close</IonButton>
+          </IonButtons>
+        </IonToolbar>
+      </IonHeader>
+      <IonContent className="ion-padding" style={{ fontSize: 14, lineHeight: 1.5 }}>
+        {kind === "terms" ? <TermsContent /> : kind === "privacy" ? <PrivacyContent /> : <HowItWorksContent />}
+      </IonContent>
+    </IonModal>
   );
 }

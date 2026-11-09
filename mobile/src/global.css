@@ -1,0 +1,26 @@
+/* Routerless IonTabs layout: ion-tabs/ion-tab carry no intrinsic styles, so
+   the active tab gets a flex viewport that fills the space above the tab
+   bar and .tab-scroll handles overflow scrolling. */
+ion-app {
+  display: flex;
+  flex-direction: column;
+}
+ion-tabs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+ion-tab:not(.tab-hidden) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.tab-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
