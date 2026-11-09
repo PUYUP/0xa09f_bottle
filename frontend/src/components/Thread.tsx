@@ -96,13 +96,13 @@ function MessageNode({
         <div className="mt-2" onClick={(e) => e.stopPropagation()}>
           <textarea
             className="retro-input w-full resize-none"
-            rows={2}
-            placeholder="write your reply… (enter to send, shift+enter for new line)"
+            rows={3}
+            placeholder="write your reply…"
             value={replyText}
             autoFocus
             onChange={(e) => setReplyText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 const t = replyText.trim();
                 if (!t) return;

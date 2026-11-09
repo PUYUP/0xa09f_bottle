@@ -511,12 +511,12 @@ export default function App() {
           <div className="flex gap-2">
             <textarea
               className="retro-input retro-msg w-full resize-none"
-              rows={2}
-              placeholder="write something for the sea… (enter to cast, shift+enter for new line)"
+              rows={3}
+              placeholder="write something for the sea…"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                   e.preventDefault();
                   run(async () => {
                     await dropBottle(message, "86400");
