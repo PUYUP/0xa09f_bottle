@@ -18,11 +18,14 @@ services:
     environment:
       - ADDR=:8080
       - REDIS_URL=redis://redis:6379/0
+      # TEMPORARY: all live state runs on Postgres; Redis is bypassed while
+      # delivery/thread consistency is validated. Remove this line (and keep
+      # REDIS_URL) to switch back to the Redis hot store.
+      - PG_ONLY=true
     ports:
       - "127.0.0.1:8080:8080"   # localhost only — terminate TLS at the proxy
-    depends_on:
-      redis:
-        condition: service_healthy
+    # No depends_on: PG_ONLY mode never connects to Redis. Re-add
+    # `depends_on: redis: condition: service_healthy` when switching back.
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
       interval: 30s

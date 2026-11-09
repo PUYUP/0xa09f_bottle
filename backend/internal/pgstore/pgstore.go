@@ -176,6 +176,17 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   created_at            BIGINT NOT NULL,
   updated_at            BIGINT NOT NULL
 );
+
+-- server_kv is the generic live-state table used when Redis is disabled
+-- (PG_ONLY mode): auth nonces, pop tokens, verified-kid sets, and the
+-- server's static ECDH identity all live here as key -> JSON value with an
+-- optional expiry (unix seconds; 0 = never).
+CREATE TABLE IF NOT EXISTS server_kv (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  expires_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS server_kv_expiry_idx ON server_kv (expires_at) WHERE expires_at > 0;
 `
 
 type PGStore struct {

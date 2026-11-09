@@ -51,8 +51,9 @@ func (s *Server) metricsHandler(c fiber.Ctx) error {
 
 	ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
 	deps := fiber.Map{}
-	deps["redis"] = s.store.Ping(ctx) == nil
-	if s.pg != nil {
+	deps["store"] = s.store.Ping(ctx) == nil
+	deps["pg_only"] = s.pgBacked
+	if s.pg != nil && !s.pgBacked {
 		deps["pg"] = s.pg.Ping(ctx) == nil
 	}
 	cancel()
@@ -64,8 +65,8 @@ func (s *Server) metricsHandler(c fiber.Ctx) error {
 	if outboxDepth > 100 {
 		alerts = append(alerts, "pg_outbox_backlog")
 	}
-	if ok, _ := deps["redis"].(bool); !ok {
-		alerts = append(alerts, "redis_down")
+	if ok, _ := deps["store"].(bool); !ok {
+		alerts = append(alerts, "store_down")
 	}
 	if s.pg != nil {
 		if ok, _ := deps["pg"].(bool); !ok {

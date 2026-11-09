@@ -60,8 +60,13 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := s.pg.RegisterPoolKeys(ctx, keys); err != nil {
-				log.Printf("pg key_registry: %v", err)
+			// PG_ONLY: LiveStore.DepositKeys already registered these rows
+			// synchronously — re-upserting could reset consumed_at on a key
+			// a concurrent fetch just claimed.
+			if !s.pgBacked {
+				if err := s.pg.RegisterPoolKeys(ctx, keys); err != nil {
+					log.Printf("pg key_registry: %v", err)
+				}
 			}
 			if authed {
 				if err := s.pg.UpsertUserKeys(ctx, user.ID, keys); err != nil {
@@ -117,7 +122,7 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "fetch failed")
 	}
-	if s.pg != nil && len(keys) > 0 {
+	if s.pg != nil && !s.pgBacked && len(keys) > 0 {
 		fetched := make([]string, 0, len(keys))
 		for _, k := range keys {
 			fetched = append(fetched, k.KID)

@@ -8,7 +8,6 @@ import (
 
 	"a09f/bottle/internal/config"
 	"a09f/bottle/internal/pgstore"
-	"a09f/bottle/internal/store"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
@@ -19,9 +18,13 @@ import (
 
 type Server struct {
 	cfg    config.Config
-	store  *store.Store
+	store  LiveStore
 	pg     *pgstore.PGStore
 	events *eventHub
+	// pgBacked is true when the live store is Postgres itself (PG_ONLY
+	// mode) — bottles are written to PG directly, so the Redis->PG sync
+	// outbox, reconciler, and pool rebuild are all bypassed.
+	pgBacked bool
 
 	authOnce sync.Once
 	authPriv *ecdh.PrivateKey
@@ -41,12 +44,15 @@ type entCacheEntry struct {
 	until int64
 }
 
-func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
-	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub(), metrics: newMetrics(), devSeen: map[string]int64{}, entCache: map[string]entCacheEntry{}}
-	if pg != nil {
+func New(ctx context.Context, cfg config.Config, st LiveStore, pg *pgstore.PGStore) *fiber.App {
+	_, pgBacked := st.(*pgstore.LiveStore)
+	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub(), metrics: newMetrics(), devSeen: map[string]int64{}, entCache: map[string]entCacheEntry{}, pgBacked: pgBacked}
+	if pg != nil && !pgBacked {
 		go s.rebuildPool(ctx)
 		go s.pgReconciler(ctx)
 		go s.pgOutboxWorker(ctx)
+	}
+	if pg != nil {
 		go s.retentionWorker(ctx)
 	}
 	app := fiber.New(fiber.Config{
@@ -171,10 +177,10 @@ func (s *Server) ready(c fiber.Ctx) error {
 	if err := s.store.Ping(ctx); err != nil {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 			"status": "unhealthy",
-			"error":  "redis unavailable",
+			"error":  "store unavailable",
 		})
 	}
-	if s.pg != nil {
+	if s.pg != nil && !s.pgBacked {
 		if err := s.pg.Ping(ctx); err != nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"status": "unhealthy",
@@ -184,7 +190,7 @@ func (s *Server) ready(c fiber.Ctx) error {
 	}
 	return c.JSON(fiber.Map{
 		"status": "ready",
-		"redis":  "ok",
+		"store":  "ok",
 		"pg":     s.pg != nil,
 	})
 }

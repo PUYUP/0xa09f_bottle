@@ -13,8 +13,10 @@ import (
 
 // syncBottlePG writes through to Postgres synchronously; on failure it
 // schedules an async retry so transient PG outages do not lose data.
+// In PG_ONLY mode bottles are already persisted by LiveStore.CreateBottle,
+// so this is a no-op.
 func (s *Server) syncBottlePG(ctx context.Context, bottle store.Bottle) {
-	if s.pg == nil {
+	if s.pg == nil || s.pgBacked {
 		return
 	}
 	syncCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

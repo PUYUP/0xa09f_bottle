@@ -37,6 +37,10 @@ type Config struct {
 	TrialDays          int
 	TrialExtensions    int
 	TrialExtensionDays int
+	// PGOnly runs the whole live state (pool, bottles, pickup, auth) on
+	// Postgres and never connects to Redis. Temporary mode while Redis
+	// consistency issues are being isolated; requires DATABASE_URL.
+	PGOnly bool
 }
 
 func FromEnv() Config {
@@ -62,6 +66,7 @@ func FromEnv() Config {
 		TrialDays:           intEnv("TRIAL_DAYS", 15),
 		TrialExtensions:     intEnv("TRIAL_EXTENSIONS", 1),
 		TrialExtensionDays:  intEnv("TRIAL_EXTENSION_DAYS", 15),
+		PGOnly:              os.Getenv("PG_ONLY") == "true" || os.Getenv("PG_ONLY") == "1",
 	}
 }
 

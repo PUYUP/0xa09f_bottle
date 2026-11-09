@@ -175,7 +175,7 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 	}
 	if cursorMode {
 		// Scalable Cursor-based pagination (O(log N + limit) index seek)
-		if s.pg != nil {
+		if s.pg != nil && !s.pgBacked {
 			redisBottles, err := s.store.ListBottlesCursor(c.Context(), limit, beforeCreatedAt, beforeID)
 			if err != nil {
 				return fiber.NewError(fiber.StatusInternalServerError, "list failed")
@@ -216,7 +216,7 @@ func (s *Server) listBottles(c fiber.Ctx) error {
 				offset = n
 			}
 		}
-		if s.pg != nil {
+		if s.pg != nil && !s.pgBacked {
 			need := limit + offset
 			redisBottles, err := s.store.ListBottles(c.Context(), need, 0)
 			if err != nil {
@@ -312,7 +312,7 @@ func (s *Server) listBottleChildren(c fiber.Ctx) error {
 	}
 	add(redisChildren)
 	pgCount := 0
-	if s.pg != nil {
+	if s.pg != nil && !s.pgBacked {
 		pgChildren, err := s.pg.ListChildren(c.Context(), parentID, limit)
 		if err != nil {
 			log.Printf("pg list children %s: %v", parentID, err)
@@ -367,7 +367,7 @@ func bottleMatchesKids(b store.Bottle, kids map[string]struct{}) bool {
 // fetchCursorPage merges the Redis fast path and Postgres archive for one
 // cursor-paginated page.
 func (s *Server) fetchCursorPage(ctx context.Context, limit int, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error) {
-	if s.pg != nil {
+	if s.pg != nil && !s.pgBacked {
 		redisBottles, err := s.store.ListBottlesCursor(ctx, limit, beforeCreatedAt, beforeID)
 		if err != nil {
 			return nil, err
@@ -459,22 +459,25 @@ func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64
 			// window: a bottle is cast-visible in Redis seconds before its PG
 			// row + bottle_kids index commit, so the PG-only path can miss a
 			// fresh catch for one refresh. Merge in kid-matching bottles from
-			// the recent Redis tail to close that gap.
-			if recent, err := s.recentRedisBottlesForKids(c.Context(), kids, beforeCreatedAt, beforeID); err != nil {
-				log.Printf("redis recent merge: %v", err)
-			} else if len(recent) > 0 {
-				seen := make(map[string]struct{}, len(bottles))
-				for _, b := range bottles {
-					seen[b.ID] = struct{}{}
-				}
-				for _, b := range recent {
-					if _, ok := seen[b.ID]; !ok {
-						bottles = append(bottles, b)
+			// the recent Redis tail to close that gap. In PG_ONLY mode the
+			// store IS Postgres — no gap exists.
+			if !s.pgBacked {
+				if recent, err := s.recentRedisBottlesForKids(c.Context(), kids, beforeCreatedAt, beforeID); err != nil {
+					log.Printf("redis recent merge: %v", err)
+				} else if len(recent) > 0 {
+					seen := make(map[string]struct{}, len(bottles))
+					for _, b := range bottles {
+						seen[b.ID] = struct{}{}
 					}
-				}
-				sortBottles(bottles)
-				if len(bottles) > limit {
-					bottles = bottles[:limit]
+					for _, b := range recent {
+						if _, ok := seen[b.ID]; !ok {
+							bottles = append(bottles, b)
+						}
+					}
+					sortBottles(bottles)
+					if len(bottles) > limit {
+						bottles = bottles[:limit]
+					}
 				}
 			}
 			nextCursor := ""
