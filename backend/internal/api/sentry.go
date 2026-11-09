@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/getsentry/sentry-go"
+	"github.com/gofiber/fiber/v3"
 )
 
 // sentryRecovery captures panics per request and reports them to Sentry.

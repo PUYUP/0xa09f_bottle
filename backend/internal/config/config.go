@@ -24,6 +24,19 @@ type Config struct {
 	MetricsToken string
 	// SentryDSN enables error reporting when set; empty disables it.
 	SentryDSN string
+	// Billing (Polar.sh). Empty product IDs disable checkout; empty
+	// webhook secret disables the webhook endpoint.
+	PolarAccessToken    string
+	PolarAPIBase        string
+	PolarProductMonthly string
+	PolarProductYearly  string
+	PolarWebhookSecret  string
+	WebURL              string
+	// Free trial per identity: TrialDays once, extendable TrialExtensions
+	// times by TrialExtensionDays each.
+	TrialDays          int
+	TrialExtensions    int
+	TrialExtensionDays int
 }
 
 func FromEnv() Config {
@@ -40,6 +53,15 @@ func FromEnv() Config {
 		BottleRetentionDays: intEnv("BOTTLE_RETENTION_DAYS", 0),
 		MetricsToken:        os.Getenv("METRICS_TOKEN"),
 		SentryDSN:           os.Getenv("SENTRY_DSN"),
+		PolarAccessToken:    os.Getenv("POLAR_ACCESS_TOKEN"),
+		PolarAPIBase:        env("POLAR_API_BASE", "https://api.polar.sh"),
+		PolarProductMonthly: os.Getenv("POLAR_PRODUCT_MONTHLY"),
+		PolarProductYearly:  os.Getenv("POLAR_PRODUCT_YEARLY"),
+		PolarWebhookSecret:  os.Getenv("POLAR_WEBHOOK_SECRET"),
+		WebURL:              env("WEB_URL", "https://web.a09f.com"),
+		TrialDays:           intEnv("TRIAL_DAYS", 15),
+		TrialExtensions:     intEnv("TRIAL_EXTENSIONS", 1),
+		TrialExtensionDays:  intEnv("TRIAL_EXTENSION_DAYS", 15),
 	}
 }
 

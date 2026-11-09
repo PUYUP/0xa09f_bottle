@@ -31,10 +31,18 @@ type Server struct {
 
 	devMu   sync.Mutex
 	devSeen map[string]int64
+
+	entMu    sync.Mutex
+	entCache map[string]entCacheEntry
+}
+
+type entCacheEntry struct {
+	ok    bool
+	until int64
 }
 
 func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PGStore) *fiber.App {
-	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub(), metrics: newMetrics(), devSeen: map[string]int64{}}
+	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub(), metrics: newMetrics(), devSeen: map[string]int64{}, entCache: map[string]entCacheEntry{}}
 	if pg != nil {
 		go s.rebuildPool(ctx)
 		go s.pgReconciler(ctx)
@@ -132,6 +140,10 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Post("/api/me/username", userLimiter, s.changeUsername)
 	app.Delete("/api/me", userLimiter, s.deleteMe)
 	app.Get("/api/me/stats", s.meStats)
+	app.Get("/api/billing/status", s.billingStatus)
+	app.Post("/api/billing/checkout", userLimiter, s.billingCheckout)
+	app.Post("/api/billing/trial/extend", userLimiter, s.billingExtendTrial)
+	app.Post("/api/billing/webhook", s.billingWebhook)
 	app.Get("/api/users/by-username/:username", s.getUserByUsername)
 	app.Get("/api/users/:id", s.getUser)
 	app.Post("/api/users/:id/block", userLimiter, s.blockUser)

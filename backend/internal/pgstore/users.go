@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	ErrNotFound  = errors.New("not found")
-	ErrTaken     = errors.New("username taken")
-	ErrCooldown  = errors.New("username change cooldown")
+	ErrNotFound = errors.New("not found")
+	ErrTaken    = errors.New("username taken")
+	ErrCooldown = errors.New("username change cooldown")
 )
 
 // usernameChangeCooldown limits renames so usernames stay meaningful for

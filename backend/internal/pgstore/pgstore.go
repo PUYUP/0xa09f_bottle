@@ -161,6 +161,21 @@ CREATE TABLE IF NOT EXISTS user_devices (
   PRIMARY KEY (user_id, device_id)
 );
 CREATE INDEX IF NOT EXISTS user_devices_user_idx ON user_devices (user_id, last_seen DESC);
+
+-- subscriptions tracks the paywall entitlement per identity (userId derived
+-- from the identity public key). Everyone starts on a free trial; paid
+-- state comes from Polar webhooks. user_id cascades with the account.
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id               TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  polar_subscription_id TEXT UNIQUE,
+  polar_customer_id     TEXT NOT NULL DEFAULT '',
+  status                TEXT NOT NULL DEFAULT 'trialing',
+  trial_ends_at         BIGINT NOT NULL DEFAULT 0,
+  trial_extensions      INT NOT NULL DEFAULT 0,
+  current_period_end    BIGINT NOT NULL DEFAULT 0,
+  created_at            BIGINT NOT NULL,
+  updated_at            BIGINT NOT NULL
+);
 `
 
 type PGStore struct {

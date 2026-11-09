@@ -22,6 +22,7 @@ import {
 } from "./lib/store";
 import { getIdentity, randomUsername as genName } from "./lib/identity";
 import { claimUsernameUI } from "./lib/store";
+import { billingStatus, checkout, extendTrial, type Entitlement } from "./lib/billing";
 import { TermsContent, PrivacyContent, HowItWorksContent } from "./legal";
 import type { ThreadNode } from "./lib/store";
 
@@ -159,6 +160,68 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
   );
 }
 
+// Paywall blocks the app once the free trial (plus its one extension) has
+// lapsed without payment. Checkout happens on Polar.sh — we only ever see
+// the anonymous userId, never billing PII.
+function Paywall({ ent, onChanged }: { ent: Entitlement; onChanged: (ent: Entitlement) => void }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const act = (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setErr("");
+    fn()
+      .catch((e) => setErr((e as Error).message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center p-4">
+      <div className="bevel w-full">
+        <div className="retro-titlebar">
+          <span>🌊 the tide has gone out</span>
+          <span className="text-[13px]">trial ended</span>
+        </div>
+        <div className="retro-body space-y-3">
+          <p className="text-[14px] text-neutral-700">
+            your free trial is over. subscribe to keep this identity — and
+            every message in it — alive. a new private key always works, but
+            starts with an empty sea.
+          </p>
+          {ent.canExtend && (
+            <button
+              className="retro-btn w-full"
+              disabled={busy}
+              onClick={() => act(async () => onChanged(await extendTrial()))}
+            >
+              {busy ? "extending…" : `extend trial — ${ent.extensionsLeft} left`}
+            </button>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className="retro-btn"
+              disabled={busy}
+              onClick={() => act(async () => { window.location.href = await checkout("monthly"); })}
+            >
+              $2 / month
+            </button>
+            <button
+              className="retro-btn"
+              disabled={busy}
+              onClick={() => act(async () => { window.location.href = await checkout("yearly"); })}
+            >
+              $10 / year
+            </button>
+          </div>
+          {err && <div className="text-[13px] text-red-700">{err}</div>}
+          <p className="text-[12px] text-neutral-500">
+            payments are processed by Polar.sh — we only receive your anonymous
+            identity id, never your card or email.
+          </p>
+        </div>
+      </div>
+    </main>
+  );
+}
+
 export default function App() {
   const state = useApp();
   const [message, setMessage] = useState("");
@@ -171,6 +234,7 @@ export default function App() {
   const [detailPath, setDetailPath] = useState<string[]>([]);
   const [catchToast, setCatchToast] = useState(false);
   const [vaultDue, setVaultDue] = useState(false);
+  const [billing, setBilling] = useState<Entitlement | null>(null);
   const [identity, setIdentity] = useState<Awaited<ReturnType<typeof getIdentity>> | null>(null);
   const [busy, setBusy] = useState(false);
   const autoBaited = useRef(false);
@@ -182,6 +246,30 @@ export default function App() {
       .then((r) => setVaultDue(r.due))
       .catch(() => {});
   }, []);
+
+  // Billing entitlement: fetched once the username (and therefore the
+  // server-side user row + trial clock) exists. A ?checkout=success return
+  // from Polar polls until the webhook lands.
+  const refreshBilling = () =>
+    billingStatus()
+      .then(setBilling)
+      .catch(() => {});
+  useEffect(() => {
+    if (!identity?.username) return;
+    refreshBilling();
+    if (new URLSearchParams(window.location.search).get("checkout") === "success") {
+      const iv = setInterval(refreshBilling, 3000);
+      const stop = setTimeout(() => {
+        clearInterval(iv);
+        window.history.replaceState(null, "", window.location.pathname);
+      }, 90000);
+      return () => {
+        clearInterval(iv);
+        clearTimeout(stop);
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity?.username]);
 
   // New-catch toast: an SSE bottle event means something landed on our
   // bait — flash a banner for a few seconds.
@@ -232,6 +320,11 @@ export default function App() {
         onClaimed={() => getIdentity().then(setIdentity).catch(() => {})}
       />
     );
+  }
+
+  // Paywall: lapsed trial + no payment → only billing routes remain usable.
+  if (billing && !billing.entitled) {
+    return <Paywall ent={billing} onChanged={setBilling} />;
   }
 
   const openBaitDialog = () => setBaitDialog(true);
@@ -333,6 +426,31 @@ export default function App() {
           <VaultButtons />
         </div>
       </div>
+
+      {billing?.status === "trialing" && billing.daysLeft <= 7 && billing.entitled && (
+        <div className="bevel mb-2">
+          <div className="retro-titlebar">
+            <span>⏳ free trial</span>
+            <span className="text-[13px]">{billing.daysLeft}d left</span>
+          </div>
+          <div className="retro-body flex items-center justify-between gap-3 text-[13px]">
+            <span>
+              your identity key stops working when the trial ends — subscribe
+              ($2/mo · $10/yr) or extend once to keep it alive.
+            </span>
+            <button
+              className="retro-btn shrink-0"
+              onClick={() =>
+                checkout("monthly")
+                  .then((u) => { window.location.href = u; })
+                  .catch((e) => log(`checkout: ${(e as Error).message}`, "err"))
+              }
+            >
+              subscribe
+            </button>
+          </div>
+        </div>
+      )}
 
       {vaultDue && (
         <div className="bevel mb-2">

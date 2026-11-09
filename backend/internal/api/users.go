@@ -100,6 +100,8 @@ func (s *Server) registerUser(c fiber.Ctx) error {
 		}
 		return fiber.NewError(fiber.StatusInternalServerError, "create failed")
 	}
+	// Start the free trial clock at registration.
+	_ = s.pg.EnsureTrial(c.Context(), userID, s.cfg.TrialDays)
 	if err := s.pg.UpsertUserIdentity(c.Context(), userID, req.PublicKey); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "create failed")
 	}

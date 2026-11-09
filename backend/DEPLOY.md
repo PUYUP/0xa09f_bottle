@@ -69,6 +69,26 @@ Error reporting opsional via Sentry:
 - Frontend: set `VITE_SENTRY_DSN` saat build Vercel — error React/API
   client-side dilaporkan. Kosongkan untuk menonaktifkan.
 
+## Billing / paywall (Polar.sh)
+
+Setiap identitas mendapat trial gratis: `TRIAL_DAYS` (default 15) +
+`TRIAL_EXTENSIONS` kali perpanjangan `TRIAL_EXTENSION_DAYS` (default 1×15).
+Setelah itu semua endpoint terautentikasi mengembalikan `402
+subscription_required` — kecuali `/api/billing/*`. Cast anonymous tetap
+bisa (tidak terikat identitas).
+
+Setup Polar:
+
+1. Buat 2 product di Polar: monthly ($2) dan yearly ($10) → catat product ID
+   ke `POLAR_PRODUCT_MONTHLY` / `POLAR_PRODUCT_YEARLY`.
+2. `POLAR_ACCESS_TOKEN` dari Polar dashboard (organization access token).
+3. Webhook endpoint di Polar → `https://relay.a09f.com/api/billing/webhook`,
+   events `subscription.*` → copy signing secret ke `POLAR_WEBHOOK_SECRET`.
+4. `WEB_URL=https://web.a09f.com` untuk checkout success/return URL.
+
+Hanya `user_id` (public key identity) yang dikirim ke Polar via checkout
+metadata — email/card tetap di Polar sebagai merchant of record.
+
 ## Update berikutnya
 
 ```bash

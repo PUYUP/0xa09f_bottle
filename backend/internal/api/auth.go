@@ -125,5 +125,20 @@ func (s *Server) requireAuth(c fiber.Ctx) (pgstore.User, error) {
 	if !ok {
 		return pgstore.User{}, fiber.NewError(fiber.StatusUnauthorized, "valid proof-of-possession required")
 	}
+	// Paywall: a valid identity proof is necessary but not sufficient once
+	// the free trial lapses without payment. Billing endpoints stay open —
+	// they are the remedy for this 402.
+	if !billingExempt(c.Path()) {
+		entitled, err := s.billingEntitled(c.Context(), user.ID)
+		if err != nil {
+			return pgstore.User{}, fiber.NewError(fiber.StatusServiceUnavailable, "billing check failed")
+		}
+		if !entitled {
+			return pgstore.User{}, c.Status(fiber.StatusPaymentRequired).JSON(fiber.Map{
+				"error": "subscription required",
+				"code":  "subscription_required",
+			})
+		}
+	}
 	return user, nil
 }
