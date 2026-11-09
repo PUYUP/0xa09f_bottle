@@ -611,8 +611,12 @@ export default function App() {
               roots={[detailNode]}
               onOpen={(n) => {
                 const id = n.rec.bottle?.id;
-                if (id && id !== detailPath[detailPath.length - 1]) {
-                  openThread(id).catch(() => {});
+                if (!id) return;
+                // Always (re)fetch this node's children — clicking the node
+                // that is already the detail root must still lazy-load its
+                // replies, otherwise the "💬 N ▸" tag is a dead end.
+                openThread(id).catch(() => {});
+                if (id !== detailPath[detailPath.length - 1]) {
                   setDetailPath((p) => [...p, id]);
                 }
               }}
@@ -661,7 +665,14 @@ export default function App() {
               </div>
             ))}
           {threads.slice(0, threadLimit).map((r) => {
-            const replies = countReplies(r);
+            // Reply count: prefer the server-reported thread total (replies
+            // at any depth) over locally loaded children — replies are
+            // fetched lazily, so countReplies alone shows 0 until opened.
+            const replies = Math.max(
+              countReplies(r),
+              r.rec.threadCount || 0,
+              r.rec.childCount || 0
+            );
             const isSent = r.rec.claim?.status === "SENT";
             const bottleId = r.rec.bottle?.id || "";
             // Badge: thread-level reply activity (any depth, via rootId)
