@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/subtle"
 	"encoding/base64"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -67,6 +68,7 @@ func (s *Server) popToken(c fiber.Ctx) error {
 	}
 
 	verified := kids
+	pubsMap := map[string][]string{}
 	if s.pg != nil {
 		verified = nil
 		serverPriv, err := s.authKey()
@@ -76,7 +78,7 @@ func (s *Server) popToken(c fiber.Ctx) error {
 		now := time.Now().Unix()
 		// One batched pubkey lookup for the whole kid set instead of a
 		// query per kid — keeps issuance O(1) round-trips at any pool size.
-		pubsMap, err := s.pg.PubkeysForKids(c.Context(), kids)
+		pubsMap, err = s.pg.PubkeysForKids(c.Context(), kids)
 		if err != nil {
 			log.Printf("pg pubkeys for kids: %v", err)
 			return fiber.NewError(fiber.StatusInternalServerError, "pubkey lookup failed")
@@ -138,7 +140,11 @@ func (s *Server) popToken(c fiber.Ctx) error {
 		if len(missing) > 5 {
 			missing = missing[:5]
 		}
-		log.Printf("pop-token partial: %d/%d kids verified, missing e.g. %v", len(verified), len(kids), missing)
+		pubCounts := make([]string, 0, len(missing))
+		for _, k := range missing {
+			pubCounts = append(pubCounts, fmt.Sprintf("%s(npub=%d,hasProof=%v)", k, len(pubsMap[k]), func() bool { _, ok := req.Proofs[k]; return ok }()))
+		}
+		log.Printf("pop-token partial: %d/%d kids verified, missing e.g. %v detail=%v", len(verified), len(kids), missing, pubCounts)
 	}
 
 	// Verified-set expansion: when the request proves the identity kid
