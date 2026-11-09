@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "./hooks/useApp";
-import { AccountPanel, DeviceCard, MyKeysPanel, PoolPanel, StatsCard, VaultButtons } from "./components/Panels";
+import { AccountPanel, BlocksCard, DeviceCard, DevicesCard, MyKeysPanel, PoolPanel, StatsCard, SubscriptionCard, VaultButtons } from "./components/Panels";
 import { ThreadList, countReplies, findNode } from "./components/Thread";
 import { BaitLine } from "./components/BaitLine";
 import { BOTTLE_QUOTA, MAX_LOCAL_KEYS } from "./lib/crypto";
@@ -546,6 +546,9 @@ export default function App() {
       {page === "account" && (
         <>
           <AccountPanel onClose={() => setPage("catch")} />
+          <SubscriptionCard />
+          <DevicesCard />
+          <BlocksCard />
           <DeviceCard />
           <StatsCard />
         </>

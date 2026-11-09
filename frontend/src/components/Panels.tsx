@@ -250,27 +250,8 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
 }
 
 export function AccountPanel({ onClose }: { onClose: () => void }) {
-  const { blocks } = useApp();
   const [username, setUsername] = useState("");
-  const [target, setTarget] = useState("");
-  const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
-  const [billing, setBilling] = useState<Entitlement | null>(null);
   const identity = useAppIdentity();
-
-  if (blocks === null) refreshBlocks().catch(() => {});
-
-  useEffect(() => {
-    if (!identity?.username) return;
-    fetchDevices()
-      .then(setDevices)
-      .catch(() => setDevices([]));
-    billingStatus()
-      .then(setBilling)
-      .catch(() => setBilling(null));
-  }, [identity?.username]);
-
-  const fmt = (unix: number) =>
-    unix ? new Date(unix * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
 
   return (
     <Panel title="👤 account" onClose={onClose}>
@@ -323,143 +304,185 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
         </div>
         )}
         {identity?.username && (
-          <>
-            <div className="flex gap-2">
-              <input
-                className="retro-input flex-1"
-                placeholder="username or user id"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-              />
-              <button
-                className="retro-btn"
-                onClick={() => blockOrReportUser("block", target).catch((e) => log(`block: ${(e as Error).message}`, "err"))}
-              >
-                🚫 block
-              </button>
-              <button
-                className="retro-btn"
-                onClick={() => blockOrReportUser("report", target).catch((e) => log(`report: ${(e as Error).message}`, "err"))}
-              >
-                ⚠ report
-              </button>
-            </div>
-            <div>
-              <p className="mb-1 text-[13px] text-neutral-600">blocked users:</p>
-              <div>
-                {blocks === null && <span className="text-neutral-600">loading…</span>}
-                {blocks?.length === 0 && <span className="text-neutral-600">not blocking anyone</span>}
-                {blocks?.map((b) => (
-                  <div key={b.blockedUserId} className="flex items-baseline gap-3">
-                    <span title={`${b.blockedUserId}${b.reason ? ` · ${b.reason}` : ""}`}>
-                      @{b.username}
-                    </span>
-                    <span
-                      className="retro-link text-[13px]"
-                      onClick={() => unblockUser(b.blockedUserId).catch((e) => log(`unblock: ${(e as Error).message}`, "err"))}
-                    >
-                      unblock
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="mb-1 text-[13px] text-neutral-600">subscription:</p>
-              {billing === null && <span className="text-neutral-600">loading…</span>}
-              {billing && (
-                <div className="space-y-1 text-[13px]">
-                  <div>
-                    status <b>{billing.status}</b>
-                    {billing.entitled && billing.daysLeft > 0 && (
-                      <span className="text-neutral-600"> · {billing.daysLeft}d left</span>
-                    )}
-                  </div>
-                  {billing.status === "trialing" && (
-                    <div className="text-neutral-600">
-                      trial ends {fmt(billing.trialEndsAt)}
-                      {billing.extensionsLeft > 0 && ` · ${billing.extensionsLeft} extension(s) left`}
-                    </div>
-                  )}
-                  {billing.periodEnd > 0 && (
-                    <div className="text-neutral-600">paid period ends {fmt(billing.periodEnd)}</div>
-                  )}
-                  {!billing.entitled && billing.canExtend && (
-                    <div className="text-amber-700">
-                      trial lapsed — extend once or subscribe to restore access
-                    </div>
-                  )}
-                  {!billing.entitled && !billing.canExtend && (
-                    <div className="text-red-700">access blocked — subscribe to continue</div>
-                  )}
-                  {billing.status !== "active" && billing.status !== "past_due" && (
-                    <div className="flex gap-2 pt-1">
-                      {billing.canExtend && (
-                        <span className="retro-link" onClick={() => extendTrial().then(setBilling).catch(() => {})}>
-                          extend trial
-                        </span>
-                      )}
-                      <span className="retro-link" onClick={() => checkout("monthly").then((u) => { window.location.href = u; }).catch(() => {})}>
-                        subscribe $2/mo
-                      </span>
-                      <span className="retro-link" onClick={() => checkout("yearly").then((u) => { window.location.href = u; }).catch(() => {})}>
-                        $10/yr
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div>
-              <p className="mb-1 text-[13px] text-neutral-600">devices:</p>
-              {devices === null && <span className="text-neutral-600">loading…</span>}
-              {devices?.length === 0 && <span className="text-neutral-600">no devices registered yet</span>}
-              {devices?.map((d) => (
-                <div key={d.deviceId} className="flex items-baseline gap-3">
-                  <span title={d.deviceId} className="font-mono text-[12px]">
-                    {d.deviceId.slice(0, 8)}…
-                  </span>
-                  <span className="text-[12px] text-neutral-600">
-                    {d.userAgent ? d.userAgent.slice(0, 40) : "unknown client"} · seen{" "}
-                    {new Date(d.lastSeen * 1000).toLocaleString()}
-                    {d.current && " · this device"}
-                    {d.revoked && " · revoked"}
-                  </span>
-                  {!d.current && !d.revoked && (
-                    <span
-                      className="retro-link text-[13px]"
-                      onClick={() =>
-                        revokeDevice(d.deviceId)
-                          .then(() => fetchDevices().then(setDevices))
-                          .catch((e) => log(`revoke: ${(e as Error).message}`, "err"))
-                      }
-                    >
-                      revoke
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="border-t border-neutral-300 pt-2">
-              <p className="mb-1 text-[13px] text-neutral-600">
-                danger zone — permanent, cannot be undone:
-              </p>
-              <button
-                className="retro-btn"
-                style={{ color: "#a00" }}
-                onClick={() => {
-                  if (!window.confirm(`delete @${identity.username} permanently? your username, blocks, reports and sync data are erased; messages already delivered to others stay readable by them.`)) return;
-                  if (!window.confirm("are you absolutely sure? this cannot be undone.")) return;
-                  deleteAccount().catch((e) => log(`delete account: ${(e as Error).message}`, "err"));
-                }}
-              >
-                🗑 delete account
-              </button>
-            </div>
-          </>
+          <div className="border-t border-neutral-300 pt-2">
+            <p className="mb-1 text-[13px] text-neutral-600">
+              danger zone — permanent, cannot be undone:
+            </p>
+            <button
+              className="retro-btn"
+              style={{ color: "#a00" }}
+              onClick={() => {
+                if (!window.confirm(`delete @${identity.username} permanently? your username, blocks, reports and sync data are erased; messages already delivered to others stay readable by them.`)) return;
+                if (!window.confirm("are you absolutely sure? this cannot be undone.")) return;
+                deleteAccount().catch((e) => log(`delete account: ${(e as Error).message}`, "err"));
+              }}
+            >
+              🗑 delete account
+            </button>
+          </div>
         )}
       </div>
     </Panel>
+  );
+}
+
+export function SubscriptionCard() {
+  const identity = useAppIdentity();
+  const [billing, setBilling] = useState<Entitlement | null>(null);
+
+  useEffect(() => {
+    if (!identity?.username) return;
+    billingStatus().then(setBilling).catch(() => setBilling(null));
+  }, [identity?.username]);
+
+  const fmt = (unix: number) =>
+    unix ? new Date(unix * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
+
+  return (
+    <InfoCard title="💳 subscription">
+      {!identity?.username && <span className="text-neutral-600">claim a username first</span>}
+      {identity?.username && billing === null && <span className="text-neutral-600">loading…</span>}
+      {billing && (
+        <div className="space-y-1 text-[13px]">
+          <div>
+            status <b>{billing.status}</b>
+            {billing.entitled && billing.daysLeft > 0 && (
+              <span className="text-neutral-600"> · {billing.daysLeft}d left</span>
+            )}
+          </div>
+          {billing.status === "trialing" && (
+            <div className="text-neutral-600">
+              trial ends {fmt(billing.trialEndsAt)}
+              {billing.extensionsLeft > 0 && ` · ${billing.extensionsLeft} extension(s) left`}
+            </div>
+          )}
+          {billing.periodEnd > 0 && (
+            <div className="text-neutral-600">paid period ends {fmt(billing.periodEnd)}</div>
+          )}
+          {!billing.entitled && billing.canExtend && (
+            <div className="text-amber-700">trial lapsed — extend once or subscribe</div>
+          )}
+          {!billing.entitled && !billing.canExtend && (
+            <div className="text-red-700">access blocked — subscribe to continue</div>
+          )}
+          {billing.status !== "active" && billing.status !== "past_due" && (
+            <div className="flex gap-3 pt-1">
+              {billing.canExtend && (
+                <span className="retro-link" onClick={() => extendTrial().then(setBilling).catch(() => {})}>
+                  extend trial
+                </span>
+              )}
+              <span className="retro-link" onClick={() => checkout("monthly").then((u) => { window.location.href = u; }).catch(() => {})}>
+                subscribe $2/mo
+              </span>
+              <span className="retro-link" onClick={() => checkout("yearly").then((u) => { window.location.href = u; }).catch(() => {})}>
+                $10/yr
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+    </InfoCard>
+  );
+}
+
+export function DevicesCard() {
+  const identity = useAppIdentity();
+  const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
+
+  useEffect(() => {
+    if (!identity?.username) return;
+    fetchDevices().then(setDevices).catch(() => setDevices([]));
+  }, [identity?.username]);
+
+  return (
+    <InfoCard title="📱 your devices">
+      {!identity?.username && <span className="text-neutral-600">claim a username first</span>}
+      {identity?.username && devices === null && <span className="text-neutral-600">loading…</span>}
+      {devices?.length === 0 && <span className="text-neutral-600">no devices registered yet</span>}
+      {devices?.map((d) => (
+        <div key={d.deviceId} className="flex items-baseline gap-3 py-0.5">
+          <span title={d.deviceId} className="font-mono text-[12px]">
+            {d.deviceId.slice(0, 8)}…
+          </span>
+          <span className="text-[12px] text-neutral-600">
+            {d.userAgent ? d.userAgent.slice(0, 40) : "unknown client"} · seen{" "}
+            {new Date(d.lastSeen * 1000).toLocaleString()}
+            {d.current && " · this device"}
+            {d.revoked && " · revoked"}
+          </span>
+          {!d.current && !d.revoked && (
+            <span
+              className="retro-link text-[13px]"
+              onClick={() =>
+                revokeDevice(d.deviceId)
+                  .then(() => fetchDevices().then(setDevices))
+                  .catch((e) => log(`revoke: ${(e as Error).message}`, "err"))
+              }
+            >
+              revoke
+            </span>
+          )}
+        </div>
+      ))}
+    </InfoCard>
+  );
+}
+
+export function BlocksCard() {
+  const { blocks } = useApp();
+  const [target, setTarget] = useState("");
+  const identity = useAppIdentity();
+
+  useEffect(() => {
+    if (blocks === null) refreshBlocks().catch(() => {});
+  }, [blocks]);
+
+  return (
+    <InfoCard title="🚫 blocked users">
+      {!identity?.username && <span className="text-neutral-600">claim a username to manage blocks</span>}
+      {identity?.username && (
+        <>
+          <div className="mb-2 flex gap-2">
+            <input
+              className="retro-input flex-1"
+              placeholder="username or user id"
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+            />
+            <button
+              className="retro-btn"
+              onClick={() => blockOrReportUser("block", target).catch((e) => log(`block: ${(e as Error).message}`, "err"))}
+            >
+              block
+            </button>
+            <button
+              className="retro-btn"
+              onClick={() => blockOrReportUser("report", target).catch((e) => log(`report: ${(e as Error).message}`, "err"))}
+            >
+              report
+            </button>
+          </div>
+          <div>
+            {blocks === null && <span className="text-neutral-600">loading…</span>}
+            {blocks?.length === 0 && <span className="text-neutral-600">not blocking anyone</span>}
+            {blocks?.map((b) => (
+              <div key={b.blockedUserId} className="flex items-baseline gap-3 py-0.5">
+                <span title={`${b.blockedUserId}${b.reason ? ` · ${b.reason}` : ""}`}>
+                  @{b.username}
+                </span>
+                <span
+                  className="retro-link text-[13px]"
+                  onClick={() => unblockUser(b.blockedUserId).catch((e) => log(`unblock: ${(e as Error).message}`, "err"))}
+                >
+                  unblock
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </InfoCard>
   );
 }
 
