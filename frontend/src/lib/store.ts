@@ -722,34 +722,57 @@ async function catchKidsParam(): Promise<string> {
 // kid's private key (ECDH challenge vs the server identity key) and gets a
 // short-lived token bound to exactly that kid set.
 
+// replyPrivateJwkCandidates returns private JWK candidates for a reply:
+// kid, best first. Reply keys are deterministic per (identity, parent
+// bottle), but legacy vault imports can carry stored reply:<id> records
+// whose key doesn't match — the parent's plaintext embeds the reply
+// pubkey replies are wrapped to, so candidates are ordered by whose
+// public half (x/y) matches it.
+async function replyPrivateJwkCandidates(kid: string): Promise<JWK[]> {
+  const parentId = kid.slice(REPLY_PREFIX.length);
+  const out: JWK[] = [];
+  const seen = new Set<string>();
+  const push = (j: JWK | null | undefined) => {
+    if (j && j.kty === "EC" && j.crv === "P-256" && j.d && !seen.has(j.d)) {
+      seen.add(j.d);
+      out.push(j);
+    }
+  };
+  const idt = await getIdentity().catch(() => null);
+  if (idt?.privateJwk && parentId) {
+    try {
+      push((await deriveReplyKeyPair(idt.privateJwk, parentId)).privateJwk);
+    } catch (e) {
+      log(`pop proof: reply key derive failed for ${kid.slice(0, 24)}: ${(e as Error).message}`, "warn");
+    }
+  }
+  const stored = await idbGet<ThreadRecord>(META_STORE, kid).catch(() => null);
+  push(stored?.privateJwk);
+  const parentRec =
+    (await idbGet<ThreadRecord>(META_STORE, `sent:${parentId}`).catch(() => null)) ??
+    (await idbGet<ThreadRecord>(META_STORE, `caught:${parentId}`).catch(() => null));
+  const target = parentRec?.plain?.reply;
+  if (target?.x && target?.y) {
+    out.sort(
+      (a, b) =>
+        Number(b.x === target.x && b.y === target.y) - Number(a.x === target.x && a.y === target.y)
+    );
+  }
+  return out;
+}
+
 async function privateJwkForKid(kid: string): Promise<JWK | null> {
   if (kid.startsWith(SELF_PREFIX)) {
     const idt = await getIdentity().catch(() => null);
     return idt?.privateJwk ?? null;
   }
   if (kid.startsWith(REPLY_PREFIX)) {
-    const parentId = kid.slice(REPLY_PREFIX.length);
-    const stored = await idbGet<ThreadRecord>(META_STORE, kid).catch(() => null);
-    // Vault imports can restore reply:<id> records whose privateJwk is a
-    // legacy/non-JWK shape — using it makes importKey throw and silently
-    // drops the proof (server sees hasProof=false). Only trust a stored
-    // key that actually looks like an EC JWK; otherwise derive.
-    const storedJwk = stored?.privateJwk;
-    if (storedJwk && storedJwk.kty === "EC" && storedJwk.crv === "P-256" && storedJwk.d) {
-      return storedJwk;
+    const cands = await replyPrivateJwkCandidates(kid);
+    if (!cands.length) {
+      const idt = await getIdentity().catch(() => null);
+      if (!idt?.privateJwk) log(`pop proof: no identity for ${kid.slice(0, 24)}`, "warn");
     }
-    const idt = await getIdentity().catch(() => null);
-    if (!idt?.privateJwk || !parentId) {
-      log(`pop proof: no identity for ${kid.slice(0, 24)}`, "warn");
-      return null;
-    }
-    try {
-      const kp = await deriveReplyKeyPair(idt.privateJwk, parentId);
-      return kp.privateJwk;
-    } catch (e) {
-      log(`pop proof: reply key derive failed for ${kid.slice(0, 24)}: ${(e as Error).message}`, "warn");
-      return null;
-    }
+    return cands[0] ?? null;
   }
   const rec = state.keys.find((k) => k.kid === kid);
   return rec?.privateJwk ?? null;
@@ -949,31 +972,37 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
   }
   for (const envelope of bottle.envelopes || []) {
     const isSelf = typeof envelope.kid === "string" && envelope.kid.startsWith(SELF_PREFIX);
-    let record = envelope.kid && !isSelf ? byKid.get(envelope.kid) : undefined;
-    if (!record && !isSelf && typeof envelope.kid === "string" && envelope.kid.startsWith(REPLY_PREFIX)) {
-      // stored reply keys (legacy/random) first, then deterministic derive
-      const replyRec = await idbGet<ThreadRecord>(META_STORE, envelope.kid).catch(() => null);
-      const replyJwk = replyRec?.privateJwk;
-      if (replyJwk && replyJwk.kty === "EC" && replyJwk.crv === "P-256" && replyJwk.d) {
-        record = { privateJwk: replyJwk } as KeyRecord;
-      } else {
-        const parentId = envelope.kid.slice(REPLY_PREFIX.length);
-        const idt = await getIdentity().catch(() => null);
-        if (idt?.privateJwk && parentId) {
-          const kp = await deriveReplyKeyPair(idt.privateJwk, parentId);
-          record = { privateJwk: kp.privateJwk } as KeyRecord;
-        }
-      }
-    }
-    let privJwk: JWK | undefined = record?.privateJwk;
+    // Private-key candidates for this envelope, best first. Reply kids can
+    // have both a deterministic key and a stale stored one — try each
+    // until the wrap actually unwraps.
+    let privJwks: JWK[] = [];
     if (isSelf) {
       const id = await getIdentity().catch(() => null);
-      privJwk = id?.privateJwk;
+      if (id?.privateJwk) privJwks = [id.privateJwk];
+    } else if (typeof envelope.kid === "string" && envelope.kid) {
+      if (envelope.kid.startsWith(REPLY_PREFIX)) {
+        privJwks = await replyPrivateJwkCandidates(envelope.kid);
+      } else {
+        const rec = byKid.get(envelope.kid);
+        if (rec?.privateJwk) privJwks = [rec.privateJwk];
+      }
     }
-    if (!privJwk) continue;
+    if (!privJwks.length) continue;
     try {
-      const rawSession = await unwrapSessionKey(bottle.id, envelope as Envelope, privJwk);
-      const plain = decodePlaintext(await decryptPayload(bottle, rawSession));
+      let rawSession: ArrayBuffer | null = null;
+      let plain: Plain | null = null;
+      for (const jwk of privJwks) {
+        try {
+          const rs = await unwrapSessionKey(bottle.id, envelope as Envelope, jwk);
+          const p = decodePlaintext(await decryptPayload(bottle, rs));
+          rawSession = rs;
+          plain = p;
+          break;
+        } catch {
+          // wrong candidate key — try the next
+        }
+      }
+      if (!rawSession || !plain) continue;
       if (isSelf) {
         // Our own sent bottle: recover plaintext locally, no pickup claim.
         // Merge onto any existing record so repliesSeenAt/readAt/stats
