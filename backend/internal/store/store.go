@@ -991,6 +991,13 @@ func (s *Store) PopSetPut(ctx context.Context, userID string, kids []string) err
 	return s.rdb.Set(ctx, popSetPrefix+userID, raw, popSetTTL).Err()
 }
 
+// PopSetDelete drops the cached verified-kid set for a user (account
+// deletion). Tokens already issued keep working until expiry — they are
+// short-lived and bound to kids, not the account.
+func (s *Store) PopSetDelete(ctx context.Context, userID string) error {
+	return s.rdb.Del(ctx, popSetPrefix+userID).Err()
+}
+
 var pickupScript = redis.NewScript(`
 local raw = redis.call('GET', KEYS[1])
 if not raw then

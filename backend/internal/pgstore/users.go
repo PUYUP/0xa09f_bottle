@@ -213,6 +213,31 @@ func (p *PGStore) ReportBottle(ctx context.Context, bottleID, reporterID, reason
 }
 
 // BottleExists reports whether a bottle id is present in the archive.
+// DeleteUser removes an account and everything tied to it. The users row
+// delete cascades to user_identities, user_keys, blocked_users and
+// reported_users (both directions). Sync records, bottle reports filed by
+// this user, and key_registry ownership are cleaned explicitly. Encrypted
+// bottles are left alone — they are ciphertext the server cannot read, and
+// recipients may still hold legitimate copies.
+func (p *PGStore) DeleteUser(ctx context.Context, userID string) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	for _, q := range []string{
+		`DELETE FROM user_sync_records WHERE user_id = $1`,
+		`DELETE FROM reported_bottles WHERE reporter_user_id = $1`,
+		`DELETE FROM key_registry WHERE owner = $1`,
+		`DELETE FROM users WHERE id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, q, userID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func (p *PGStore) BottleExists(ctx context.Context, id string) (bool, error) {
 	var exists bool
 	err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM bottles WHERE id = $1)`, id).Scan(&exists)

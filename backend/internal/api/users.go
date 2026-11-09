@@ -127,6 +127,23 @@ func publicUser(u pgstore.User) fiber.Map {
 	return fiber.Map{"id": u.ID, "username": u.Username, "createdAt": u.CreatedAt}
 }
 
+// deleteMe permanently removes the authenticated user's account: identity,
+// username, key ownership, blocks, reports they filed, and encrypted sync
+// records. Encrypted bottles are untouched — the server cannot read them
+// anyway, and recipients keep their legitimate copies. Store policy
+// (Apple/Google) requires this endpoint for UGC apps.
+func (s *Server) deleteMe(c fiber.Ctx) error {
+	user, err := s.requireAuth(c)
+	if err != nil {
+		return err
+	}
+	if err := s.pg.DeleteUser(c.Context(), user.ID); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "delete failed")
+	}
+	_ = s.store.PopSetDelete(c.Context(), user.ID)
+	return c.JSON(fiber.Map{"ok": true})
+}
+
 // me returns the authenticated user. Auth = proof-of-possession headers.
 func (s *Server) me(c fiber.Ctx) error {
 	user, err := s.requireAuth(c)

@@ -106,6 +106,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store, pg *pgstore.PG
 	app.Post("/api/auth/pop-token", nonceLimiter, s.popToken)
 	app.Post("/api/users", userLimiter, s.registerUser)
 	app.Get("/api/me", s.me)
+	app.Delete("/api/me", userLimiter, s.deleteMe)
 	app.Get("/api/me/stats", s.meStats)
 	app.Get("/api/users/by-username/:username", s.getUserByUsername)
 	app.Get("/api/users/:id", s.getUser)

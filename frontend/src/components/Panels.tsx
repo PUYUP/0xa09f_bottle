@@ -4,6 +4,7 @@ import { getIdentityRecord, randomUsername as genName } from "../lib/identity";
 import {
   blockOrReportUser,
   claimUsernameUI,
+  deleteAccount,
   exportVault,
   fetchMyStats,
   fetchPoolStatus,
@@ -323,6 +324,22 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
                   </div>
                 ))}
               </div>
+            </div>
+            <div className="border-t border-neutral-300 pt-2">
+              <p className="mb-1 text-[13px] text-neutral-600">
+                danger zone — permanent, cannot be undone:
+              </p>
+              <button
+                className="retro-btn"
+                style={{ color: "#a00" }}
+                onClick={() => {
+                  if (!window.confirm(`delete @${identity.username} permanently? your username, blocks, reports and sync data are erased; messages already delivered to others stay readable by them.`)) return;
+                  if (!window.confirm("are you absolutely sure? this cannot be undone.")) return;
+                  deleteAccount().catch((e) => log(`delete account: ${(e as Error).message}`, "err"));
+                }}
+              >
+                🗑 delete account
+              </button>
             </div>
           </>
         )}

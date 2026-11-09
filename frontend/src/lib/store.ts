@@ -1732,6 +1732,19 @@ export async function claimUsernameUI(username: string) {
   log(`claimed @${username}`);
 }
 
+// deleteAccount permanently removes the server-side account (username,
+// identity, key ownership, blocks, reports, sync records) then wipes all
+// local data and reloads into a fresh anonymous state. Encrypted bottles
+// already delivered stay — the server never could read them anyway.
+export async function deleteAccount() {
+  await api("/api/me", { method: "DELETE" });
+  await idbClear(KEY_STORE);
+  await idbClear(META_STORE);
+  await idbClear(KV_STORE);
+  resetIdentityCache();
+  location.reload();
+}
+
 export async function blockOrReportUser(kind: "block" | "report", targetInput: string) {
   const id = await getIdentity();
   if (!id.username) {

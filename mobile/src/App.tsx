@@ -30,6 +30,7 @@ import {
   replyBottle,
   reportBottle,
   deleteBottle,
+  deleteAccount,
   exportVault,
   importVaultFile,
   readTTLSeconds,
@@ -306,6 +307,20 @@ export default function App() {
               if (f) importVaultFile(f).catch((err) => log(`import: ${(err as Error).message}`, "err"));
             }}
           />
+          {identity?.username && (
+            <IonButton
+              size="small"
+              fill="clear"
+              color="danger"
+              onClick={() => {
+                if (!window.confirm(`delete @${identity.username} permanently? this erases your username, blocks, reports and sync data. messages already delivered to others stay readable by them.`)) return;
+                if (!window.confirm("are you absolutely sure? this cannot be undone.")) return;
+                deleteAccount().catch((e) => log(`delete account: ${(e as Error).message}`, "err"));
+              }}
+            >
+              delete account
+            </IonButton>
+          )}
         </div>
 
         {/* catch list */}
