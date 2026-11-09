@@ -902,6 +902,70 @@ func (s *Store) ListChildren(ctx context.Context, parentID string, limit int) ([
 	return bottles, nil
 }
 
+// PubkeysForKids resolves envelope recipient pubkeys from the live Redis
+// corpus for the given kids. Postgres is the primary registry, but a fresh
+// bottle's bottle_kids row only appears after syncBottlePG commits — during
+// that gap proof-of-possession for kids like reply:<id> would fail even
+// though the bottle (and its envelopes) is already live. Scanning the recent
+// tail closes the gap; the window matches the PG retry/outbox lag.
+func (s *Store) PubkeysForKids(ctx context.Context, kids []string) (map[string][]string, error) {
+	want := make(map[string]struct{}, len(kids))
+	for _, k := range kids {
+		want[k] = struct{}{}
+	}
+	out := make(map[string][]string, len(want))
+	if len(want) == 0 {
+		return out, nil
+	}
+	const windowSec = 900
+	const pageSize = 200
+	const maxPages = 5
+	cutoff := time.Now().Unix() - windowSec
+	var curCA int64
+	var curID string
+	for page := 0; page < maxPages && len(out) < len(want); page++ {
+		candidates, err := s.ListBottlesCursor(ctx, pageSize, curCA, curID)
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		exhausted := len(candidates) < pageSize
+		stop := false
+		for _, b := range candidates {
+			if b.CreatedAt < cutoff {
+				stop = true
+				break
+			}
+			for _, env := range b.Envelopes {
+				if env.KID == "" || env.RecipientPublicKey == "" {
+					continue
+				}
+				if _, ok := want[env.KID]; !ok {
+					continue
+				}
+				dup := false
+				for _, p := range out[env.KID] {
+					if p == env.RecipientPublicKey {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					out[env.KID] = append(out[env.KID], env.RecipientPublicKey)
+				}
+			}
+		}
+		if stop || exhausted {
+			break
+		}
+		last := candidates[len(candidates)-1]
+		curCA, curID = last.CreatedAt, last.ID
+	}
+	return out, nil
+}
+
 // ---------- proof-of-possession tokens ----------
 // A pop token is issued after the client proves possession of the private
 // keys behind a set of envelope kids (ECDH challenge against the server

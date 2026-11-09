@@ -81,6 +81,24 @@ func (s *Server) popToken(c fiber.Ctx) error {
 			log.Printf("pg pubkeys for kids: %v", err)
 			return fiber.NewError(fiber.StatusInternalServerError, "pubkey lookup failed")
 		}
+		// Redis fallback: a fresh bottle's bottle_kids row lands only after
+		// syncBottlePG commits, so kids like reply:<id> would be unprovable
+		// for the sync gap even though the envelope pubkey is already live.
+		missing := make([]string, 0)
+		for _, kid := range kids {
+			if len(pubsMap[kid]) == 0 {
+				missing = append(missing, kid)
+			}
+		}
+		if len(missing) > 0 {
+			if redisPubs, err := s.store.PubkeysForKids(c.Context(), missing); err != nil {
+				log.Printf("redis pubkeys for kids: %v", err)
+			} else {
+				for k, pubs := range redisPubs {
+					pubsMap[k] = append(pubsMap[k], pubs...)
+				}
+			}
+		}
 		for _, kid := range kids {
 			p, ok := req.Proofs[kid]
 			if !ok || p.Ts <= 0 {
