@@ -272,7 +272,7 @@ export default function App() {
               setPage("catch");
               run(checkBottles);
             }}
-            title="scan the void for catches addressed to your bait"
+            title="scan the sea for catches addressed to your bait"
           >
             <span className="retro-tool-icon">🪝</span>
             <span>check catch</span>
@@ -305,14 +305,14 @@ export default function App() {
       {/* ── composer ───────────────────────────────────────── */}
       <div className="bevel mb-2">
         <div className="retro-titlebar">
-          <span>🎣 cast into the void</span>
+          <span>🎣 cast into the sea</span>
           <span className="text-[13px]">sealed with AES-256-GCM</span>
         </div>
         <div className="retro-body">
           <div className="flex gap-2">
             <input
               className="retro-input retro-msg w-full"
-              placeholder="write something for the void…"
+              placeholder="write something for the sea…"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {
@@ -442,7 +442,7 @@ export default function App() {
                     <span className="retro-link" onClick={() => run(checkBottles)}>
                       🪝 check catch
                     </span>{" "}
-                    — scan the void for catches addressed to your bait
+                    — scan the sea for catches addressed to your bait
                   </li>
                 </ol>
                 <p className="text-neutral-600">
@@ -451,7 +451,7 @@ export default function App() {
               </div>
             ) : (
               <div className="msg bevel-in text-center text-neutral-700">
-                🎣 the void is quiet — nothing on the line yet.
+                🎣 the sea is quiet — nothing on the line yet.
               </div>
             ))}
           {threads.slice(0, threadLimit).map((r) => {

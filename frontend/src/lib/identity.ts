@@ -195,7 +195,7 @@ export async function claimUsername(username: string): Promise<void> {
   identityRecord = id;
 }
 
-const RANDOM_NAME_A = ["drifter","nomad","cipher","static","void","paper","salt","ember","foghorn","meridian","packet","quiet","rust","tide","umbra"];
+const RANDOM_NAME_A = ["drifter","nomad","cipher","static","deep","paper","salt","ember","foghorn","meridian","packet","quiet","rust","tide","brine"];
 const RANDOM_NAME_B = ["fox","whale","monk","engine","letter","sparrow","vault","signal","anchor","drift","field","harbor","lantern","current","moth"];
 
 export function randomUsername(): string {

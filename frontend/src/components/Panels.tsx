@@ -209,7 +209,7 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
               </tr>
             ))}
             {poolKeys?.length === 0 && own.length === 0 && (
-              <tr><td className="text-neutral-600">the void is empty — no bait in the pool</td></tr>
+              <tr><td className="text-neutral-600">the sea is empty — no bait in the pool</td></tr>
             )}
             {others.map((k, i) => (
               <tr key={k.kid}>

@@ -1271,7 +1271,7 @@ async function renderAccount() {
   }
 }
 
-const RANDOM_NAME_A = ["drifter","nomad","cipher","static","void","paper","salt","ember","foghorn","meridian","packet","quiet","rust","tide","umbra"];
+const RANDOM_NAME_A = ["drifter","nomad","cipher","static","deep","paper","salt","ember","foghorn","meridian","packet","quiet","rust","tide","brine"];
 const RANDOM_NAME_B = ["fox","whale","monk","engine","letter","sparrow","vault","signal","anchor","drift","cipher","field","harbor","lantern","current","moth"];
 
 function randomUsername() {

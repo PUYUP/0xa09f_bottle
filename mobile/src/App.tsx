@@ -260,7 +260,7 @@ export default function App() {
         {/* composer */}
         <IonItem lines="none" className="ion-margin-top">
           <IonTextarea
-            placeholder="write something for the void…"
+            placeholder="write something for the sea…"
             value={message}
             autoGrow
             onIonInput={(e) => setMessage(e.detail.value ?? "")}
@@ -313,7 +313,7 @@ export default function App() {
           {rows.length === 0 && (
             <IonItem lines="none">
               <IonLabel className="ion-text-center ion-padding">
-                {state.ready ? "the void is quiet — nothing on the line yet" : "booting…"}
+                {state.ready ? "the sea is quiet — nothing on the line yet" : "booting…"}
               </IonLabel>
             </IonItem>
           )}
