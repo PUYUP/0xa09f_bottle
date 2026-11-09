@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS users (
   created_at  BIGINT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username_changed_at BIGINT NOT NULL DEFAULT 0;
 
 -- users may own many public keys (pool kids live in user_keys); the single
 -- identity key used for proof-of-possession auth lives here.

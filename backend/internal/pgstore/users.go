@@ -8,9 +8,48 @@ import (
 	"a09f/bottle/internal/store"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
-var ErrNotFound = errors.New("not found")
+var (
+	ErrNotFound  = errors.New("not found")
+	ErrTaken     = errors.New("username taken")
+	ErrCooldown  = errors.New("username change cooldown")
+)
+
+// usernameChangeCooldown limits renames so usernames stay meaningful for
+// block/report moderation.
+const usernameChangeCooldown = 7 * 24 * time.Hour
+
+// ChangeUsername renames a user, enforcing the cooldown server-side. The
+// unique index on LOWER(username) rejects collisions; map 23505 to ErrTaken.
+func (p *PGStore) ChangeUsername(ctx context.Context, userID, username string) error {
+	ct, err := p.pool.Exec(ctx, `
+UPDATE users SET username = $2, username_changed_at = $3
+WHERE id = $1
+  AND (username_changed_at = 0 OR username_changed_at < $4)`,
+		userID, username, time.Now().Unix(), time.Now().Add(-usernameChangeCooldown).Unix())
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return ErrTaken
+		}
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		// distinguish "no such user" from "cooldown active"
+		var changedAt int64
+		err := p.pool.QueryRow(ctx, `SELECT username_changed_at FROM users WHERE id = $1`, userID).Scan(&changedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return ErrCooldown
+	}
+	return nil
+}
 
 // User is an account identified solely by an ECDH P-256 identity key.
 // PublicKey is the identity key joined from user_identities — a user may own
