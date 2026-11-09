@@ -41,6 +41,16 @@ export function TermsContent() {
         app data without exporting your vault — your messages become
         permanently unreadable. We cannot recover them.
       </p>
+      <p>
+        The same applies if your keys are <strong>stolen or exposed</strong>.
+        Because every message addressed to your keys can be decrypted by
+        whoever holds them, a compromised key can unlock your entire message
+        history — past and future. Treat your vault export and device access
+        like a PIN or a house key: whoever holds it holds your mailbox. We
+        cannot detect, prevent, or undo access by someone who legitimately
+        possesses your keys, and we are not responsible for losses arising
+        from key compromise caused by you or your device.
+      </p>
 
       <h3>5. Disclaimer</h3>
       <p>
@@ -297,6 +307,24 @@ export function PrivacyContent() {
         Note: Tor does not make you unidentifiable inside the app — your keys,
         messages and timing patterns are still yours. It only hides your IP
         from the server.
+      </p>
+
+      <h3>Compromised keys</h3>
+      <p>
+        Your private keys are the only thing that can decrypt messages sent
+        to you. If a key is stolen — through malware, a shared device, a
+        leaked vault export, or any other means — the holder can read every
+        message ever addressed to that key, including messages from long
+        ago. This is inherent to how end-to-end encryption works: the
+        server never sees your keys, so it also cannot tell whether access
+        came from you or an impostor.
+      </p>
+      <p>
+        Guard your keys accordingly: never share a vault export, keep your
+        vault passphrase separate from the file itself, and revoke devices
+        you no longer control (Settings → devices). If you believe a key is
+        compromised, stop using it and generate a fresh identity — there is
+        no way to "rotate" a leaked key retroactively.
       </p>
 
       <h3>Accounts & identity</h3>
