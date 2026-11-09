@@ -509,9 +509,10 @@ export default function App() {
         </div>
         <div className="retro-body">
           <div className="flex gap-2">
-            <input
-              className="retro-input retro-msg w-full"
-              placeholder="write something for the sea…"
+            <textarea
+              className="retro-input retro-msg w-full resize-none"
+              rows={2}
+              placeholder="write something for the sea… (enter to cast, shift+enter for new line)"
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => {

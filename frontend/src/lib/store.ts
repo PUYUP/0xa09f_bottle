@@ -654,7 +654,7 @@ async function markBottleDeleted(bottleId: string) {
 // we sent can be deleted — authorship is enforced server-side via the
 // self:<uid> marker.
 export async function deleteBottle(bottleId: string) {
-  if (!window.confirm("delete this message for everyone?")) return;
+  if (!window.confirm("delete this message for everyone? this cannot be undone — recipients will see a tombstone.")) return;
   try {
     await api(`/api/bottles/${encodeURIComponent(bottleId)}`, { method: "DELETE" });
   } catch (e) {

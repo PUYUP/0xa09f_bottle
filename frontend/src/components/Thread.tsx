@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ThreadNode } from "../lib/store";
 import { MAX_THREAD_DEPTH } from "../lib/crypto";
 import { deleteBottle, replyBottle, reportBottle } from "../lib/store";
@@ -13,6 +14,8 @@ function MessageNode({
   onOpen?: (node: ThreadNode) => void;
 }) {
   const { bottle, plain, kid, claim } = node.rec;
+  const [replying, setReplying] = useState(false);
+  const [replyText, setReplyText] = useState("");
   const deleted = !!node.rec.deleted;
   const depth = bottle!.depth || 1;
   const isReply = !!bottle!.parentId;
@@ -73,16 +76,14 @@ function MessageNode({
             [! report]
           </span>
         )}
-        {!isSent && canReply && (
+        {!isSent && canReply && !replying && (
           <>
             {" "}
             <span
               className="retro-link"
               onClick={(e) => {
                 e.stopPropagation();
-                const text = window.prompt("write your reply…");
-                if (!text?.trim()) return;
-                replyBottle(node.rec, text.trim()).catch((err) => console.error(err));
+                setReplying(true);
               }}
             >
               [↩ reply]
@@ -90,6 +91,55 @@ function MessageNode({
           </>
         )}
       </div>
+      )}
+      {!deleted && replying && (
+        <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+          <textarea
+            className="retro-input w-full resize-none"
+            rows={2}
+            placeholder="write your reply… (enter to send, shift+enter for new line)"
+            value={replyText}
+            autoFocus
+            onChange={(e) => setReplyText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                const t = replyText.trim();
+                if (!t) return;
+                setReplying(false);
+                setReplyText("");
+                replyBottle(node.rec, t).catch((err) => console.error(err));
+              }
+              if (e.key === "Escape") {
+                setReplying(false);
+                setReplyText("");
+              }
+            }}
+          />
+          <div className="mt-1 flex gap-2 text-[13px]">
+            <span
+              className="retro-link"
+              onClick={() => {
+                const t = replyText.trim();
+                if (!t) return;
+                setReplying(false);
+                setReplyText("");
+                replyBottle(node.rec, t).catch((err) => console.error(err));
+              }}
+            >
+              send
+            </span>
+            <span
+              className="retro-link text-neutral-500"
+              onClick={() => {
+                setReplying(false);
+                setReplyText("");
+              }}
+            >
+              cancel
+            </span>
+          </div>
+        </div>
       )}
     </div>
   );
