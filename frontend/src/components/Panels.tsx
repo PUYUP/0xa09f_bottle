@@ -23,6 +23,7 @@ import {
   unblockUser,
 } from "../lib/store";
 import type { ClientMeta, DeviceInfo, PoolKeyStatus, UserStats } from "../lib/store";
+import { billingStatus, checkout, extendTrial, type Entitlement } from "../lib/billing";
 import { useApp } from "../hooks/useApp";
 import type { KeyRecord } from "../lib/types";
 
@@ -253,6 +254,7 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
   const [username, setUsername] = useState("");
   const [target, setTarget] = useState("");
   const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
+  const [billing, setBilling] = useState<Entitlement | null>(null);
   const identity = useAppIdentity();
 
   if (blocks === null) refreshBlocks().catch(() => {});
@@ -262,7 +264,13 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
     fetchDevices()
       .then(setDevices)
       .catch(() => setDevices([]));
+    billingStatus()
+      .then(setBilling)
+      .catch(() => setBilling(null));
   }, [identity?.username]);
+
+  const fmt = (unix: number) =>
+    unix ? new Date(unix * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—";
 
   return (
     <Panel title="👤 account" onClose={onClose}>
@@ -355,6 +363,52 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
                   </div>
                 ))}
               </div>
+            </div>
+            <div>
+              <p className="mb-1 text-[13px] text-neutral-600">subscription:</p>
+              {billing === null && <span className="text-neutral-600">loading…</span>}
+              {billing && (
+                <div className="space-y-1 text-[13px]">
+                  <div>
+                    status <b>{billing.status}</b>
+                    {billing.entitled && billing.daysLeft > 0 && (
+                      <span className="text-neutral-600"> · {billing.daysLeft}d left</span>
+                    )}
+                  </div>
+                  {billing.status === "trialing" && (
+                    <div className="text-neutral-600">
+                      trial ends {fmt(billing.trialEndsAt)}
+                      {billing.extensionsLeft > 0 && ` · ${billing.extensionsLeft} extension(s) left`}
+                    </div>
+                  )}
+                  {billing.periodEnd > 0 && (
+                    <div className="text-neutral-600">paid period ends {fmt(billing.periodEnd)}</div>
+                  )}
+                  {!billing.entitled && billing.canExtend && (
+                    <div className="text-amber-700">
+                      trial lapsed — extend once or subscribe to restore access
+                    </div>
+                  )}
+                  {!billing.entitled && !billing.canExtend && (
+                    <div className="text-red-700">access blocked — subscribe to continue</div>
+                  )}
+                  {billing.status !== "active" && billing.status !== "past_due" && (
+                    <div className="flex gap-2 pt-1">
+                      {billing.canExtend && (
+                        <span className="retro-link" onClick={() => extendTrial().then(setBilling).catch(() => {})}>
+                          extend trial
+                        </span>
+                      )}
+                      <span className="retro-link" onClick={() => checkout("monthly").then((u) => { window.location.href = u; }).catch(() => {})}>
+                        subscribe $2/mo
+                      </span>
+                      <span className="retro-link" onClick={() => checkout("yearly").then((u) => { window.location.href = u; }).catch(() => {})}>
+                        $10/yr
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <p className="mb-1 text-[13px] text-neutral-600">devices:</p>
