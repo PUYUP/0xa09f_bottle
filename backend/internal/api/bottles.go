@@ -452,6 +452,28 @@ func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64
 					}
 				}
 			}
+			// PG is authoritative but lags Redis by the syncBottlePG retry
+			// window: a bottle is cast-visible in Redis seconds before its PG
+			// row + bottle_kids index commit, so the PG-only path can miss a
+			// fresh catch for one refresh. Merge in kid-matching bottles from
+			// the recent Redis tail to close that gap.
+			if recent, err := s.recentRedisBottlesForKids(c.Context(), kids, beforeCreatedAt, beforeID); err != nil {
+				log.Printf("redis recent merge: %v", err)
+			} else if len(recent) > 0 {
+				seen := make(map[string]struct{}, len(bottles))
+				for _, b := range bottles {
+					seen[b.ID] = struct{}{}
+				}
+				for _, b := range recent {
+					if _, ok := seen[b.ID]; !ok {
+						bottles = append(bottles, b)
+					}
+				}
+				sortBottles(bottles)
+				if len(bottles) > limit {
+					bottles = bottles[:limit]
+				}
+			}
 			nextCursor := ""
 			if len(bottles) > 0 {
 				last := bottles[len(bottles)-1]
@@ -496,6 +518,46 @@ func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64
 		nextCursor = fmt.Sprintf("%d_%s", curCA, curID)
 	}
 	return c.JSON(fiber.Map{"bottles": out, "nextCursor": nextCursor})
+}
+
+// recentRedisBottlesForKids scans the newest Redis bottles inside a short
+// recency window and returns those matching the kid set. It exists to cover
+// the gap between a bottle's Redis write and its Postgres commit
+// (syncBottlePG retry backoff / outbox lag), which the PG bottle_kids index
+// cannot see yet. Bounded by window + page cap so it stays cheap.
+func (s *Server) recentRedisBottlesForKids(ctx context.Context, kids map[string]struct{}, beforeCreatedAt int64, beforeID string) ([]store.Bottle, error) {
+	const windowSec = 900 // 15min — far beyond the PG retry/outbox lag
+	const pageSize = 200
+	const maxPages = 10
+	cutoff := time.Now().Unix() - windowSec
+	curCA, curID := beforeCreatedAt, beforeID
+	out := make([]store.Bottle, 0, 64)
+	for page := 0; page < maxPages; page++ {
+		candidates, err := s.store.ListBottlesCursor(ctx, pageSize, curCA, curID)
+		if err != nil {
+			return nil, err
+		}
+		if len(candidates) == 0 {
+			break
+		}
+		exhausted := len(candidates) < pageSize
+		stop := false
+		for _, b := range candidates {
+			if b.CreatedAt < cutoff {
+				stop = true
+				break
+			}
+			if bottleMatchesKids(b, kids) {
+				out = append(out, b)
+			}
+		}
+		if stop || exhausted {
+			break
+		}
+		last := candidates[len(candidates)-1]
+		curCA, curID = last.CreatedAt, last.ID
+	}
+	return out, nil
 }
 
 // sortBottles orders by (createdAt DESC, id DESC) so pagination is stable
