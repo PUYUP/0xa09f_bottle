@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"a09f/bottle/internal/cache"
 	"a09f/bottle/internal/config"
 	"a09f/bottle/internal/pgstore"
 
@@ -20,6 +21,9 @@ type Server struct {
 	cfg    config.Config
 	store  LiveStore
 	pg     *pgstore.PGStore
+	// cache is an optional Redis read-through layer in front of PG. nil
+	// means every request goes straight to Postgres (Redis disabled/down).
+	cache  *cache.Store
 	events *eventHub
 	// pgBacked is true when the live store is Postgres itself (PG_ONLY
 	// mode) — bottles are written to PG directly, so the Redis->PG sync
@@ -44,9 +48,9 @@ type entCacheEntry struct {
 	until int64
 }
 
-func New(ctx context.Context, cfg config.Config, st LiveStore, pg *pgstore.PGStore) *fiber.App {
+func New(ctx context.Context, cfg config.Config, st LiveStore, pg *pgstore.PGStore, c *cache.Store) *fiber.App {
 	_, pgBacked := st.(*pgstore.LiveStore)
-	s := &Server{cfg: cfg, store: st, pg: pg, events: newEventHub(), metrics: newMetrics(), devSeen: map[string]int64{}, entCache: map[string]entCacheEntry{}, pgBacked: pgBacked}
+	s := &Server{cfg: cfg, store: st, pg: pg, cache: c, events: newEventHub(), metrics: newMetrics(), devSeen: map[string]int64{}, entCache: map[string]entCacheEntry{}, pgBacked: pgBacked}
 	if pg != nil && !pgBacked {
 		go s.rebuildPool(ctx)
 		go s.pgReconciler(ctx)

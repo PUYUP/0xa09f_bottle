@@ -179,6 +179,18 @@ func (s *Server) poolStatus(c fiber.Ctx) error {
 	if len(kids) == 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "no valid kids")
 	}
+	// Short-TTL cache: pool status changes on deposit/fetch/pickup, so 5s
+	// staleness is acceptable and collapses repeat polls to Redis.
+	var statusKey string
+	if s.cache != nil {
+		statusKey = "poolstat:" + kidsHash(kids)
+		var page struct {
+			Kids []poolStatusEntry `json:"kids"`
+		}
+		if s.cache.GetJSON(c.Context(), statusKey, &page) {
+			return c.JSON(fiber.Map{"kids": page.Kids})
+		}
+	}
 	inPool, err := s.store.PoolKidsExist(c.Context(), kids)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "status failed")
@@ -202,6 +214,9 @@ func (s *Server) poolStatus(c fiber.Ctx) error {
 		}
 		out = append(out, entry)
 	}
+	if statusKey != "" {
+		s.cache.SetJSON(c.Context(), statusKey, fiber.Map{"kids": out}, 5*time.Second)
+	}
 	return c.JSON(fiber.Map{"kids": out})
 }
 
@@ -218,9 +233,23 @@ func (s *Server) listPoolKeys(c fiber.Ctx) error {
 			offset = n
 		}
 	}
+	cacheKey := ""
+	if s.cache != nil {
+		cacheKey = "poolkeys:" + strconv.Itoa(limit) + ":" + strconv.Itoa(offset)
+		var page struct {
+			Keys []store.PoolKey `json:"keys"`
+			Size int64           `json:"size"`
+		}
+		if s.cache.GetJSON(c.Context(), cacheKey, &page) {
+			return c.JSON(fiber.Map{"keys": page.Keys, "size": page.Size})
+		}
+	}
 	keys, size, err := s.store.ListPoolKeys(c.Context(), limit, offset)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+	}
+	if cacheKey != "" {
+		s.cache.SetJSON(c.Context(), cacheKey, fiber.Map{"keys": keys, "size": size}, 10*time.Second)
 	}
 	return c.JSON(fiber.Map{"keys": keys, "size": size})
 }
@@ -256,9 +285,23 @@ func (s *Server) listPoolKids(c fiber.Ctx) error {
 			limit = n
 		}
 	}
+	cacheKey := ""
+	if s.cache != nil {
+		cacheKey = "poolkids:" + strconv.Itoa(limit)
+		var page struct {
+			Kids []string `json:"kids"`
+			Size int64    `json:"size"`
+		}
+		if s.cache.GetJSON(c.Context(), cacheKey, &page) {
+			return c.JSON(fiber.Map{"kids": page.Kids, "size": page.Size})
+		}
+	}
 	kids, size, err := s.store.ListPoolKids(c.Context(), limit)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "list failed")
+	}
+	if cacheKey != "" {
+		s.cache.SetJSON(c.Context(), cacheKey, fiber.Map{"kids": kids, "size": size}, 5*time.Second)
 	}
 	return c.JSON(fiber.Map{"kids": kids, "size": size})
 }

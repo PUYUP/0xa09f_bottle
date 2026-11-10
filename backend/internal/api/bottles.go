@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -66,6 +67,7 @@ func (s *Server) createBottle(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "create failed")
 	}
 	s.syncBottlePG(c.Context(), bottle)
+	s.cacheInvalidateBottle(c.Context(), bottle)
 	s.events.publish(bottle)
 	s.metrics.inc("bottles_created")
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"id": bottle.ID, "status": bottle.Status})
@@ -366,6 +368,23 @@ func (s *Server) listBottleThread(c fiber.Ctx) error {
 		kidSet[k] = struct{}{}
 	}
 
+	// Read-through cache: the thread subtree is the heaviest read path and
+	// changes only when a bottle in this thread is written — the per-root
+	// version counter invalidates automatically.
+	type threadPage struct {
+		Bottles []store.Bottle `json:"bottles"`
+		RootID  string         `json:"rootId"`
+	}
+	var cacheKey string
+	if s.cache != nil {
+		ver := s.cache.GetInt(c.Context(), "tver:"+rootID)
+		cacheKey = "thr:" + rootID + ":v" + strconv.FormatInt(ver, 10) + ":" + kidsHash(tokenKids) + ":" + strconv.Itoa(limit)
+		var page threadPage
+		if s.cache.GetJSON(c.Context(), cacheKey, &page) {
+			return c.JSON(page)
+		}
+	}
+
 	seen := make(map[string]bool)
 	merged := make([]store.Bottle, 0, limit)
 	add := func(list []store.Bottle) {
@@ -403,7 +422,11 @@ func (s *Server) listBottleThread(c fiber.Ctx) error {
 	if len(merged) > limit {
 		merged = merged[:limit]
 	}
-	return c.JSON(fiber.Map{"bottles": merged, "rootId": rootID})
+	page := threadPage{Bottles: merged, RootID: rootID}
+	if cacheKey != "" {
+		s.cache.SetJSON(c.Context(), cacheKey, page, time.Minute)
+	}
+	return c.JSON(page)
 }
 
 // listThreadStats returns aggregate reply stats for many thread roots in one
@@ -424,13 +447,39 @@ func (s *Server) listThreadStats(c fiber.Ctx) error {
 			break
 		}
 	}
+	// Per-root stats are cached ("tstat:<root>") and explicitly invalidated
+	// on thread writes — one MGet covers the whole request.
+	type rootStat struct {
+		Count  int64 `json:"count"`
+		LastAt int64 `json:"lastAt"`
+	}
 	out := fiber.Map{}
-	if len(roots) > 0 && s.pg != nil {
-		if stats, err := s.pg.ThreadStats(c.Context(), roots); err != nil {
+	missRoots := roots
+	if s.cache != nil && len(roots) > 0 {
+		keys := make([]string, len(roots))
+		for i, id := range roots {
+			keys[i] = "tstat:" + id
+		}
+		raws := s.cache.MGetBytes(c.Context(), keys)
+		missRoots = missRoots[:0]
+		for i, raw := range raws {
+			var st rootStat
+			if raw != nil && json.Unmarshal(raw, &st) == nil {
+				out[roots[i]] = fiber.Map{"count": st.Count, "lastAt": st.LastAt}
+			} else {
+				missRoots = append(missRoots, roots[i])
+			}
+		}
+	}
+	if len(missRoots) > 0 && s.pg != nil {
+		if stats, err := s.pg.ThreadStats(c.Context(), missRoots); err != nil {
 			log.Printf("pg bulk thread stats: %v", err)
 		} else {
 			for id, st := range stats {
 				out[id] = fiber.Map{"count": st[0], "lastAt": st[1]}
+				if s.cache != nil {
+					s.cache.SetJSON(c.Context(), "tstat:"+id, rootStat{Count: st[0], LastAt: st[1]}, 30*time.Second)
+				}
 			}
 		}
 	}
@@ -505,15 +554,33 @@ func (s *Server) fetchCursorPage(ctx context.Context, limit int, beforeCreatedAt
 // nextCursor always points at the last scanned candidate so filtered-out
 // bottles are never skipped.
 func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64, beforeID string, kids map[string]struct{}) error {
+	// Read-through cache for the kid-filtered inbox scan — the hottest read
+	// path. Keyed by a global write version (bumped on every bottle
+	// create/delete/pickup) plus the kid set, so entries self-invalidate.
+	kidList := make([]string, 0, len(kids))
+	for k := range kids {
+		kidList = append(kidList, k)
+	}
+	sort.Strings(kidList)
+	type inboxPage struct {
+		Bottles    []store.Bottle `json:"bottles"`
+		NextCursor string         `json:"nextCursor"`
+	}
+	var inboxKey string
+	if s.cache != nil {
+		ver := s.cache.GetInt(c.Context(), "iver")
+		inboxKey = "inbox:v" + strconv.FormatInt(ver, 10) + ":" + kidsHash(kidList) + ":" +
+			strconv.FormatInt(beforeCreatedAt, 10) + "_" + beforeID + ":" + strconv.Itoa(limit)
+		var page inboxPage
+		if s.cache.GetJSON(c.Context(), inboxKey, &page) {
+			return c.JSON(page)
+		}
+	}
 	// Postgres path: the bottle_kids index answers "bottles involving these
 	// kids" (recipient, self:<userId> sender marker, reply:<id>) directly and
 	// exhaustively — no corpus scan, no page cap. Falls back to the Redis+PG
 	// scan below if the query fails.
 	if s.pg != nil {
-		kidList := make([]string, 0, len(kids))
-		for k := range kids {
-			kidList = append(kidList, k)
-		}
 		if bottles, err := s.pg.ListBottlesByKids(c.Context(), kidList, limit, beforeCreatedAt, beforeID); err == nil {
 			ids := make([]string, len(bottles))
 			for i, b := range bottles {
@@ -588,7 +655,11 @@ func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64
 				last := bottles[len(bottles)-1]
 				nextCursor = fmt.Sprintf("%d_%s", last.CreatedAt, last.ID)
 			}
-			return c.JSON(fiber.Map{"bottles": bottles, "nextCursor": nextCursor})
+			page := inboxPage{Bottles: bottles, NextCursor: nextCursor}
+			if inboxKey != "" {
+				s.cache.SetJSON(c.Context(), inboxKey, page, time.Minute)
+			}
+			return c.JSON(page)
 		} else {
 			log.Printf("pg list bottles by kids: %v", err)
 		}
@@ -756,6 +827,7 @@ func (s *Server) deleteBottle(c fiber.Ctx) error {
 	if err := s.store.DeleteBottle(c.Context(), id); err != nil {
 		log.Printf("redis delete %s: %v", id, err)
 	}
+	s.cacheInvalidateBottle(c.Context(), bottle)
 	s.metrics.inc("bottle_deletes")
 	return c.JSON(fiber.Map{"ok": true})
 }
@@ -845,6 +917,14 @@ func (s *Server) pickupBottle(c fiber.Ctx) error {
 	s.metrics.inc("pickups")
 	if s.pg != nil {
 		s.archiveBottle(c.Context(), id)
+	}
+	// Pickup mutates status/deliveries shown in cached listings — invalidate.
+	if b, err := s.store.GetBottle(c.Context(), id); err == nil {
+		s.cacheInvalidateBottle(c.Context(), b)
+	} else if s.pg != nil {
+		if b, err := s.pg.GetBottle(c.Context(), id); err == nil {
+			s.cacheInvalidateBottle(c.Context(), b)
+		}
 	}
 	return c.JSON(result)
 }

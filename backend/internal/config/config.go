@@ -41,6 +41,10 @@ type Config struct {
 	// Postgres and never connects to Redis. Temporary mode while Redis
 	// consistency issues are being isolated; requires DATABASE_URL.
 	PGOnly bool
+	// RedisCache enables Redis as an optional read-through cache in front of
+	// Postgres (PG_ONLY mode only). Redis is never authoritative — when it
+	// is down or disabled every request falls back to Postgres directly.
+	RedisCache bool
 }
 
 func FromEnv() Config {
@@ -67,6 +71,7 @@ func FromEnv() Config {
 		TrialExtensions:     intEnv("TRIAL_EXTENSIONS", 1),
 		TrialExtensionDays:  intEnv("TRIAL_EXTENSION_DAYS", 15),
 		PGOnly:              os.Getenv("PG_ONLY") == "true" || os.Getenv("PG_ONLY") == "1",
+		RedisCache:          os.Getenv("REDIS_CACHE") == "true" || os.Getenv("REDIS_CACHE") == "1",
 	}
 }
 

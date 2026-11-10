@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"a09f/bottle/internal/api"
+	"a09f/bottle/internal/cache"
 	"a09f/bottle/internal/config"
 	"a09f/bottle/internal/pgstore"
 	"a09f/bottle/internal/store"
@@ -46,12 +47,17 @@ func main() {
 	// lives in Postgres — Redis is not connected at all. Otherwise Redis is
 	// the hot store and PG the archive.
 	var live api.LiveStore
+	var rc *cache.Store
 	if cfg.PGOnly {
 		if pg == nil {
 			log.Fatalf("PG_ONLY requires DATABASE_URL")
 		}
 		live = pgstore.NewLiveStore(pg, cfg.PoolTTL, cfg.MaxPool)
-		log.Printf("storage: postgres-only (redis disabled)")
+		log.Printf("storage: postgres-only")
+		if cfg.RedisCache {
+			rc = cache.New(ctx, cfg.RedisURL)
+			defer rc.Close()
+		}
 	} else {
 		st, err := store.New(cfg.RedisURL, cfg.PoolTTL, cfg.BottleTTL, cfg.MaxPool, cfg.MaxBottles)
 		if err != nil {
@@ -69,7 +75,7 @@ func main() {
 		live = st
 	}
 
-	app := api.New(ctx, cfg, live, pg)
+	app := api.New(ctx, cfg, live, pg, rc)
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
