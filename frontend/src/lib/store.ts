@@ -886,6 +886,11 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
   let forceKids: Set<string> | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const proofs: Record<string, { ts: number; proof: string }> = {};
+    // reply:<id> pubkeys only reach the server registry when the first
+    // reply envelope lands — too late for the SSE subscription that should
+    // announce that reply. Pre-register the public half of the exact key
+    // we prove so the kid verifies (and matches events) from the start.
+    const pubkeys: Record<string, string> = {};
     // The server remembers kids it has already verified under this identity
     // (bound via the self:<userId> proof), so we only re-prove kids it has
     // never seen — usually just newly deposited bait. When everything is
@@ -930,6 +935,9 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
           }
           const ts = Math.floor(Date.now() / 1000);
           proofs[kid] = { ts, proof: await kidProofDigest(shared, kid, ts) };
+          if (kid.startsWith(REPLY_PREFIX) && priv.x && priv.y) {
+            pubkeys[kid] = JSON.stringify({ kty: priv.kty, crv: priv.crv, x: priv.x, y: priv.y });
+          }
         } catch (e) {
           log(`pop proof: crypto failed for ${kid.slice(0, 24)}: ${(e as Error).message}`, "warn");
         }
@@ -943,7 +951,7 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
       token?: string;
       kids?: string[];
       expiresIn?: number;
-    }>("/api/auth/pop-token", { method: "POST", body: JSON.stringify({ kids, proofs }) });
+    }>("/api/auth/pop-token", { method: "POST", body: JSON.stringify({ kids, proofs, pubkeys }) });
     if (!token) return null;
     const verified = new Set(verifiedKids || []);
     popTokens.set(kidsKey, {

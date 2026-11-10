@@ -4,6 +4,7 @@ import (
 	"crypto/ecdh"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -23,8 +24,30 @@ type popProof struct {
 }
 
 type popTokenRequest struct {
-	Kids   []string            `json:"kids"`
-	Proofs map[string]popProof `json:"proofs"`
+	Kids    []string            `json:"kids"`
+	Proofs  map[string]popProof `json:"proofs"`
+	Pubkeys map[string]string   `json:"pubkeys"`
+}
+
+// validPublicJWK reports whether s is a public-only EC P-256 JWK. Private
+// material (a "d" member) is rejected so the registry never stores secrets.
+func validPublicJWK(s string) bool {
+	if len(s) == 0 || len(s) > 4096 {
+		return false
+	}
+	var jwk map[string]any
+	if err := json.Unmarshal([]byte(s), &jwk); err != nil {
+		return false
+	}
+	if jwk["kty"] != "EC" || jwk["crv"] != "P-256" {
+		return false
+	}
+	if _, hasD := jwk["d"]; hasD {
+		return false
+	}
+	x, okX := jwk["x"].(string)
+	y, okY := jwk["y"].(string)
+	return okX && okY && x != "" && y != ""
 }
 
 func validPopKid(kid string) bool {
@@ -76,6 +99,30 @@ func (s *Server) popToken(c fiber.Ctx) error {
 			return fiber.NewError(fiber.StatusInternalServerError, "auth key unavailable")
 		}
 		now := time.Now().Unix()
+		// Clients may pre-register pubkeys for kids that have no envelope
+		// yet (reply:<id> channels): without this, the first reply to a
+		// thread can never match the subscriber's kid set because the
+		// pubkey only lands in bottle_kids when that reply is created.
+		// Registration is safe — it only adds ECDH candidates, and the
+		// kid still requires a valid private-key proof below.
+		if len(req.Pubkeys) > 0 {
+			toRegister := make(map[string][]string, len(req.Pubkeys))
+			for kid, pub := range req.Pubkeys {
+				if _, requested := seen[kid]; !requested || !validPublicJWK(pub) {
+					continue
+				}
+				toRegister[kid] = []string{pub}
+				if len(toRegister) >= 500 {
+					break
+				}
+			}
+			if len(toRegister) > 0 {
+				if err := s.pg.RegisterKidPubkeys(c.Context(), toRegister); err != nil {
+					log.Printf("register kid pubkeys: %v", err)
+					return fiber.NewError(fiber.StatusInternalServerError, "pubkey registration failed")
+				}
+			}
+		}
 		// One batched pubkey lookup for the whole kid set instead of a
 		// query per kid — keeps issuance O(1) round-trips at any pool size.
 		pubsMap, err = s.pg.PubkeysForKids(c.Context(), kids)

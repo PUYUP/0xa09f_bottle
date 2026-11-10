@@ -62,6 +62,20 @@ CREATE TABLE IF NOT EXISTS bottle_kids (
 CREATE INDEX IF NOT EXISTS bottle_kids_kid_idx ON bottle_kids (kid);
 ALTER TABLE bottle_kids ADD COLUMN IF NOT EXISTS pubkey TEXT NOT NULL DEFAULT '';
 
+-- kid_pubkeys holds client-asserted pubkeys registered via pop-token so
+-- proof-of-possession can succeed before any bottle envelope references
+-- the kid (reply:<id> channels only get a bottle_kids row when the first
+-- reply lands — too late for the SSE subscription that should announce
+-- that very reply). Extra pubkeys only add ECDH candidates; they cannot
+-- displace existing ones, and possession still requires the private key.
+CREATE TABLE IF NOT EXISTS kid_pubkeys (
+  kid        TEXT NOT NULL,
+  pubkey     TEXT NOT NULL,
+  created_at BIGINT NOT NULL,
+  PRIMARY KEY (kid, pubkey)
+);
+CREATE INDEX IF NOT EXISTS kid_pubkeys_kid_idx ON kid_pubkeys (kid);
+
 -- key_registry binds kid -> recipient pubkey from deposit time onward, so
 -- proof-of-possession can be verified before any bottle references the kid.
 -- expires_at/consumed_at/tz_offset mirror the Redis pool member so the
@@ -508,6 +522,8 @@ SELECT kid, pubkey FROM (
   UNION
   SELECT kid, pubkey FROM bottle_kids WHERE kid = ANY($1::text[]) AND pubkey <> ''
   UNION
+  SELECT kid, pubkey FROM kid_pubkeys WHERE kid = ANY($1::text[])
+  UNION
   SELECT 'self:' || ui.user_id AS kid, ui.public_key AS pubkey
   FROM user_identities ui
   WHERE 'self:' || ui.user_id = ANY($1::text[])
@@ -524,6 +540,35 @@ SELECT kid, pubkey FROM (
 		out[kid] = append(out[kid], pub)
 	}
 	return out, rows.Err()
+}
+
+// RegisterKidPubkeys records client-asserted pubkeys for kids so PoP can
+// verify them before any bottle envelope exists. Idempotent, batched, and
+// capped per kid so a caller cannot grow the candidate set unboundedly.
+func (p *PGStore) RegisterKidPubkeys(ctx context.Context, pubs map[string][]string) error {
+	if len(pubs) == 0 {
+		return nil
+	}
+	type pair struct {
+		kid, pub string
+	}
+	pairs := make([]pair, 0, len(pubs))
+	for kid, list := range pubs {
+		for _, pub := range list {
+			pairs = append(pairs, pair{kid, pub})
+		}
+	}
+	now := time.Now().Unix()
+	for _, pr := range pairs {
+		if _, err := p.pool.Exec(ctx, `
+INSERT INTO kid_pubkeys (kid, pubkey, created_at)
+SELECT $1, $2, $3
+WHERE (SELECT count(*) FROM kid_pubkeys WHERE kid = $1) < 16
+ON CONFLICT (kid, pubkey) DO NOTHING`, pr.kid, pr.pub, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RunRetention prunes operational tables that grow unboundedly. User-facing
