@@ -728,7 +728,10 @@ export default function App() {
                 m.id.startsWith("sent:") &&
                 (m.bottle?.id === bottleId || m.bottle?.rootId === bottleId)
             );
-            const lastActivity = r.rec.threadLastAt || r.rec.lastChildAt || 0;
+            // Legacy stats fields may still be milliseconds — normalize so
+            // a huge lastActivity can't fake inbound activity.
+            let lastActivity = r.rec.threadLastAt || r.rec.lastChildAt || 0;
+            if (lastActivity > 1e11) lastActivity = Math.floor(lastActivity / 1000);
             // Stats merge bumps threadLastAt for ANY new reply — including
             // ones we can't decrypt. Treat it as inbound only when it's
             // newer than the newest reply WE sent in this thread (our
@@ -742,7 +745,10 @@ export default function App() {
                     m.id.startsWith("sent:") &&
                     (m.bottle?.id === bottleId || m.bottle?.rootId === bottleId)
                 )
-                .map((m) => m.bottle?.createdAt || 0)
+                .map((m) => {
+                  const c = m.bottle?.createdAt || 0;
+                  return c > 1e11 ? Math.floor(c / 1000) : c;
+                })
             );
             const statInbound = lastActivity > ownLatest ? lastActivity : 0;
             const inboundAt = Math.max(r.rec.lastInboundAt || 0, statInbound);

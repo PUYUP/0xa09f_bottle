@@ -1426,6 +1426,12 @@ export async function buildThreads(): Promise<ThreadBundle> {
   for (const r of all) {
     const c = r.bottle?.createdAt || 0;
     if (c > 1e11) r.bottle!.createdAt = Math.floor(c / 1000);
+    // Same ms→s normalization for activity stats — a millisecond
+    // threadLastAt would sort/badge as infinitely-new activity.
+    for (const f of ["threadLastAt", "lastChildAt", "lastInboundAt"] as const) {
+      const v = r[f];
+      if (typeof v === "number" && v > 1e11) r[f] = Math.floor(v / 1000);
+    }
   }
   const recs = all
     .filter(

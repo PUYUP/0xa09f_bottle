@@ -16,8 +16,15 @@ export function hasUnreadReplies(rec: ThreadRecord, records: ThreadRecord[]): bo
       (m.bottle?.id === bottleId || m.bottle?.rootId === bottleId)
   );
   if (!own.length) return false;
-  const lastActivity = rec.threadLastAt || rec.lastChildAt || 0;
-  const ownLatest = Math.max(0, ...own.map((m) => m.bottle?.createdAt || 0));
+  let lastActivity = rec.threadLastAt || rec.lastChildAt || 0;
+  if (lastActivity > 1e11) lastActivity = Math.floor(lastActivity / 1000);
+  const ownLatest = Math.max(
+    0,
+    ...own.map((m) => {
+      const c = m.bottle?.createdAt || 0;
+      return c > 1e11 ? Math.floor(c / 1000) : c;
+    })
+  );
   const statInbound = lastActivity > ownLatest ? lastActivity : 0;
   const inboundAt = Math.max(rec.lastInboundAt || 0, statInbound);
   return inboundAt > 0 && inboundAt * 1000 > (rec.repliesSeenAt || 0);
