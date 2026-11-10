@@ -891,13 +891,14 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
     // never seen — usually just newly deposited bait. When everything is
     // already verified we still send one proof (self preferred) because the
     // server requires at least one valid proof per issuance.
-    const knownVerified = forceKids ? new Set<string>() : await loadPopVerified();
-    const toProve = forceKids
-      ? [...forceKids]
-      : kids.filter((k) => !knownVerified.has(k));
-    if (!toProve.length) {
-      toProve.push(kids.find((k) => k.startsWith(SELF_PREFIX)) ?? kids[0]);
-    }
+    // Always prove EVERY kid, every request. The server's verified-set
+    // memory (popset) is ephemeral and silently diverges from our local
+    // pop:verified cache — relying on it shrinks token coverage without
+    // any error (this is what broke SSE kid matching: token covered ~40
+    // of 65 kids). Repeat proofs are cheap: the ECDH shared secret per
+    // kid is cached in sharedBitsCache, so only the SHA-256 digest is
+    // recomputed.
+    const toProve = [...kids];
     // Always prove self:<userId> when present: the server only merges the
     // remembered popset into the issued token when a self: kid verifies in
     // the SAME request. Without it a reply-only proof round issues a token
@@ -965,11 +966,6 @@ async function popTokenFor(kids: string[]): Promise<string | null> {
   // Second token still doesn't cover every kid (e.g. an unprovable legacy
   // key) — return it anyway; the covered subset still works.
   return popTokens.get(kidsKey)?.token ?? null;
-}
-
-async function loadPopVerified(): Promise<Set<string>> {
-  const rec = await idbGet<{ kids?: string[] }>(KV_STORE, "pop:verified").catch(() => null);
-  return new Set(rec?.kids || []);
 }
 
 // applyBottleStats persists the server's per-bottle reply aggregates
