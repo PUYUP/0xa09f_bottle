@@ -28,8 +28,8 @@ export function MessageRow({
   row: Row;
   sentIds: Set<string>;
   hasNew: boolean;
-  // hide the 💬 reply counter inside the chat screen — the whole thread is
-  // already visible there, the count is redundant.
+  // reply counter is shown in the chat detail only — the thread list keeps
+  // just the unread badge to stay light.
   showReplies?: boolean;
   onOpen: (bottleId: string) => void;
   onReply: (rec: ThreadRecord) => void;

@@ -110,7 +110,6 @@ export function ChatScreen() {
               row={row}
               sentIds={sentIds}
               hasNew={false}
-              showReplies={false}
               onOpen={(bid) => bid !== chatId && openThread(bid).catch(() => {})}
               onReply={setReplyTo}
             />

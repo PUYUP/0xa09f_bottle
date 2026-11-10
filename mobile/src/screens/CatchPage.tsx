@@ -161,6 +161,7 @@ export function CatchPage() {
               row={{ node, depth: 0 }}
               sentIds={sentIds}
               hasNew={hasUnreadReplies(node.rec, state.records)}
+              showReplies={false}
               onOpen={openChat}
               onReply={setReplyTarget}
             />
