@@ -309,16 +309,13 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    const refresh = () => {
-      buildThreads()
-        .then((t) => alive && setThreads(t.roots))
-        .catch(() => {});
-    };
-    refresh();
-    const iv = setInterval(refresh, 4000);
+    buildThreads()
+      .then((t) => alive && setThreads(t.roots))
+      .catch(() => {});
+    // No interval: the tree rebuilds whenever state.records changes
+    // (every store write calls renderInbox), which is event-driven.
     return () => {
       alive = false;
-      clearInterval(iv);
     };
   }, [state.records, state.ready]);
 

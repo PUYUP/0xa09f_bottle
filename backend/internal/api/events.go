@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -42,6 +43,12 @@ func (h *eventHub) unsubscribe(sub *eventSub) {
 	h.mu.Unlock()
 }
 
+func (h *eventHub) subCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subs)
+}
+
 // publish notifies subscribers whose kid set intersects the bottle's
 // envelope kids. Delivery is best-effort: a slow client simply misses
 // events and catches up on the next manual/periodic scan.
@@ -57,23 +64,28 @@ func (h *eventHub) publishDeleted(bottle store.Bottle) {
 
 func (h *eventHub) publishFlagged(bottle store.Bottle, deleted bool) {
 	bottleKids := make(map[string]struct{}, len(bottle.Envelopes))
+	kidList := make([]string, 0, len(bottle.Envelopes))
 	for _, env := range bottle.Envelopes {
 		bottleKids[env.KID] = struct{}{}
+		kidList = append(kidList, env.KID)
 	}
 	payload, _ := json.Marshal(map[string]any{"id": bottle.ID, "deleted": deleted})
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	delivered := 0
 	for sub := range h.subs {
 		for kid := range sub.kids {
 			if _, ok := bottleKids[kid]; ok {
 				select {
 				case sub.ch <- string(payload):
+					delivered++
 				default:
 				}
 				break
 			}
 		}
 	}
+	log.Printf("sse publish %s deleted=%v subs=%d delivered=%d kids=%v", bottle.ID, deleted, len(h.subs), delivered, kidList)
 }
 
 // streamEvents serves GET /api/events?token=... as an SSE stream. The pop
@@ -90,6 +102,7 @@ func (s *Server) streamEvents(c fiber.Ctx) error {
 	}
 	sub := s.events.subscribe(kids)
 	defer s.events.unsubscribe(sub)
+	log.Printf("sse subscribe kids=%d totalSubs=%d", len(kids), s.events.subCount())
 
 	c.Set("Content-Type", "text/event-stream")
 	c.Set("Cache-Control", "no-cache")

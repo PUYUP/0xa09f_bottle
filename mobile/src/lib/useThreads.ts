@@ -17,8 +17,8 @@ export function useThreadRows() {
 
   useEffect(() => {
     refresh();
-    const iv = setInterval(refresh, 4000);
-    return () => clearInterval(iv);
+    // No interval: rebuilds are driven by state.records changes (every
+    // store write calls renderInbox) — fully event-driven, no ticking.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.records, state.ready]);
 
