@@ -497,6 +497,9 @@ export async function dropBottle(text: string, ttlRaw: string, retried = false) 
     status: "ACTIVE",
   }, { v: 1, text: trimmed, reply: replyPair.publicJwk }, "");
   await renderInbox();
+  // New bottle id → new reply:<id> kid — resubscribe SSE immediately so
+  // replies to it notify us without waiting for the 60s reconnect.
+  connectEvents().catch(() => {});
   log(`dropped bottle ${bottleId} to ${envelopes.length} blind recipients`);
   api("/api/bottles", {
     method: "POST",
@@ -568,6 +571,7 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
     status: "ACTIVE",
   }, { v: 1, text: text.trim(), reply: replyJwk }, env.kid!);
   await renderInbox();
+  connectEvents().catch(() => {});
   log(`replied to ${bottle.id.slice(0, 8)} (depth ${depth}/${MAX_THREAD_DEPTH})`);
   api("/api/bottles", {
     method: "POST",
@@ -765,6 +769,24 @@ async function catchKidsParam(): Promise<string> {
   if (!idt?.publicJwk) return "";
   parts.push(`${SELF_PREFIX}${await deriveUserId(idt.publicJwk)}`);
   return parts.join(",");
+}
+
+// eventKidsParam extends the inbox kid set with reply:<id> kids for every
+// bottle we authored (most recent 200). The SSE subscription uses it so the
+// server pushes an event the moment a reply addressed to our reply key
+// lands — replies otherwise never trigger events and chats feel dead.
+// The inbox scan keeps using catchKidsParam: reply bottles belong to their
+// thread, not the root list.
+async function eventKidsParam(): Promise<string> {
+  const base = await catchKidsParam();
+  const parts = base ? base.split(",") : [];
+  const meta = await idbGetAll<ThreadRecord>(META_STORE).catch(() => [] as ThreadRecord[]);
+  const replyKids = meta
+    .filter((m) => typeof m.id === "string" && m.id.startsWith("sent:") && m.bottle?.id)
+    .sort((a, b) => (b.bottle?.createdAt || 0) - (a.bottle?.createdAt || 0))
+    .slice(0, 200)
+    .map((m) => `${REPLY_PREFIX}${m.bottle!.id}`);
+  return [...parts, ...replyKids].join(",");
 }
 
 // ---------- proof-of-possession ----------
@@ -1278,13 +1300,25 @@ const normTs = (v: number) => (v > 1e11 ? Math.floor(v / 1000) : v);
 let lastActivityRefresh = 0;
 const ACTIVITY_REFRESH_MS = 30_000;
 
+// Force-refresh scheduling for SSE bottle events: replies addressed to our
+// reply kids arrive as events too, so a forced stats+thread refresh makes
+// open chats update without waiting for the 30s throttle.
+let activityTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleActivityRefresh() {
+  if (activityTimer) return;
+  activityTimer = setTimeout(() => {
+    activityTimer = null;
+    refreshThreadActivity(true).catch(() => {});
+  }, 500);
+}
+
 // refreshThreadActivity keeps unread badges and reply data fresh for threads
 // we participate in. One bulk stats request updates threadLastAt on every
 // followed root; only threads whose activity actually advanced get their
 // subtree fetched (to decrypt new replies for counts/details).
-export async function refreshThreadActivity() {
+export async function refreshThreadActivity(force = false) {
   const now = Date.now();
-  if (now - lastActivityRefresh < ACTIVITY_REFRESH_MS) return;
+  if (!force && now - lastActivityRefresh < ACTIVITY_REFRESH_MS) return;
   lastActivityRefresh = now;
   const meta = await idbGetAll<ThreadRecord>(META_STORE).catch(() => [] as ThreadRecord[]);
   const lastAtByRoot = new Map<string, number>();
@@ -1465,7 +1499,7 @@ function scheduleCatchScan() {
 }
 
 export async function connectEvents() {
-  const kidsParam = await catchKidsParam();
+  const kidsParam = await eventKidsParam();
   const token = kidsParam ? await popTokenFor(kidsParam.split(",")).catch(() => null) : null;
   const url = token ? `${API_BASE}/api/events?token=${encodeURIComponent(token)}` : "";
   if (!url) {
@@ -1494,6 +1528,7 @@ export async function connectEvents() {
       }
       setState({ lastCatchAt: Date.now() });
       scheduleCatchScan();
+      scheduleActivityRefresh();
     });
   } catch {
     eventsSource = null;
