@@ -76,6 +76,7 @@ func (s *Server) depositKeys(c fiber.Ctx) error {
 		}()
 	}
 	s.metrics.inc("key_deposits")
+	s.cacheInvalidatePool(c.Context())
 	return c.JSON(fiber.Map{"accepted": len(req.Keys)})
 }
 
@@ -135,6 +136,7 @@ func (s *Server) fetchKeys(c fiber.Ctx) error {
 			}
 		}()
 	}
+	s.cacheInvalidatePool(c.Context())
 	return c.JSON(fiber.Map{"keys": keys})
 }
 
@@ -183,7 +185,7 @@ func (s *Server) poolStatus(c fiber.Ctx) error {
 	// staleness is acceptable and collapses repeat polls to Redis.
 	var statusKey string
 	if s.cache != nil {
-		statusKey = "poolstat:" + kidsHash(kids)
+		statusKey = "poolstat:" + strconv.FormatInt(s.cache.GetInt(c.Context(), "pver"), 10) + ":" + kidsHash(kids)
 		var page struct {
 			Kids []poolStatusEntry `json:"kids"`
 		}
@@ -287,7 +289,7 @@ func (s *Server) listPoolKids(c fiber.Ctx) error {
 	}
 	cacheKey := ""
 	if s.cache != nil {
-		cacheKey = "poolkids:" + strconv.Itoa(limit)
+		cacheKey = "poolkids:" + strconv.FormatInt(s.cache.GetInt(c.Context(), "pver"), 10) + ":" + strconv.Itoa(limit)
 		var page struct {
 			Kids []string `json:"kids"`
 			Size int64    `json:"size"`

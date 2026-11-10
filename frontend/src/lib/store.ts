@@ -317,7 +317,8 @@ async function ownKeysInPool(): Promise<number> {
     await syncBaitStatuses(own);
     return own.size;
   } catch {
-    setState({ ownPoolKids: new Set() });
+    // Keep the last known pool set on transient failures — emptying it
+    // makes every bait look "eaten" to the UI until the next success.
     return state.keys.filter((k) => k.depositedAt).length;
   }
 }

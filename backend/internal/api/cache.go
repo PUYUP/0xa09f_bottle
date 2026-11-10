@@ -40,4 +40,18 @@ func (s *Server) cacheInvalidateBottle(ctx context.Context, b store.Bottle) {
 	root := threadRootOf(b)
 	s.cache.Incr(ctx, "tver:"+root)
 	s.cache.Del(ctx, "tstat:"+root)
+	// Bottle writes change pool membership too: a kid wrapped into an
+	// envelope leaves the "unclaimed pool" listing, so pool caches must
+	// self-invalidate alongside the inbox version.
+	s.cacheInvalidatePool(ctx)
+}
+
+// cacheInvalidatePool bumps the pool version counter so cached poolkids/
+// poolstat entries self-invalidate on any membership change (deposit,
+// fetch/consume, bottle create/delete/pickup).
+func (s *Server) cacheInvalidatePool(ctx context.Context) {
+	if s.cache == nil {
+		return
+	}
+	s.cache.Incr(ctx, "pver")
 }
