@@ -69,7 +69,12 @@ func (h *eventHub) publishFlagged(bottle store.Bottle, deleted bool) {
 		bottleKids[env.KID] = struct{}{}
 		kidList = append(kidList, env.KID)
 	}
-	payload, _ := json.Marshal(map[string]any{"id": bottle.ID, "deleted": deleted})
+	payload, _ := json.Marshal(map[string]any{
+		"id":       bottle.ID,
+		"deleted":  deleted,
+		"parentId": bottle.ParentID,
+		"rootId":   bottle.RootID,
+	})
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delivered := 0

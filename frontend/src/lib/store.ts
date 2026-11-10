@@ -1509,6 +1509,27 @@ function scheduleCatchScan() {
   }, 800);
 }
 
+// SSE events carry the thread root (rootId for replies, the bottle id
+// itself for new casts), so the affected thread can be fetched directly
+// instead of waiting for the stats round-trip in refreshThreadActivity.
+// Bursts coalesce per root; cap keeps a flood of events bounded.
+const pendingThreadFetch = new Set<string>();
+let threadFetchTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleThreadFetch(rootId: string) {
+  pendingThreadFetch.add(rootId);
+  if (threadFetchTimer) return;
+  threadFetchTimer = setTimeout(() => {
+    threadFetchTimer = null;
+    const roots = [...pendingThreadFetch].slice(0, 4);
+    pendingThreadFetch.clear();
+    void (async () => {
+      for (const root of roots) {
+        await fetchThreadInto(root).catch(() => {});
+      }
+    })();
+  }, 500);
+}
+
 export async function connectEvents() {
   const kidsParam = await eventKidsParam();
   const token = kidsParam ? await popTokenFor(kidsParam.split(",")).catch(() => null) : null;
@@ -1531,12 +1552,24 @@ export async function connectEvents() {
       // records as placeholders instead of waiting for a scan that may
       // never surface the tombstone incrementally.
       try {
-        const data = JSON.parse((ev as MessageEvent).data || "{}") as { id?: string; deleted?: boolean };
+        const data = JSON.parse((ev as MessageEvent).data || "{}") as {
+          id?: string;
+          deleted?: boolean;
+          parentId?: string;
+          rootId?: string;
+        };
         if (data.deleted && data.id) {
           void markBottleDeleted(data.id);
           return;
         }
         console.log("[sse] bottle event", data.id?.slice(0, 8));
+        if (data.id) {
+          // Replies carry rootId; a root bottle's own id is the thread
+          // root. Either way fetch that thread directly — an open chat
+          // updates without waiting for the stats poll.
+          const root = data.rootId || (!data.parentId ? data.id : "");
+          if (root) scheduleThreadFetch(root);
+        }
       } catch {
         // fall through to scan
       }
