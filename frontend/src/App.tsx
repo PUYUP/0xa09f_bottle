@@ -729,15 +729,23 @@ export default function App() {
                 (m.bottle?.id === bottleId || m.bottle?.rootId === bottleId)
             );
             const lastActivity = r.rec.threadLastAt || r.rec.lastChildAt || 0;
-            // Badge keys off inbound reply activity only — our own replies
-            // bump threadLastAt (for sort order) but must not look "new".
-            // Legacy records lack lastInboundAt: fall back to suppressing
-            // the badge when the newest reply is ours.
-            const lastReplyOurs = r.rec.lastReplyId
-              ? state.records.some((m) => m.id === `sent:${r.rec.lastReplyId}`)
-              : false;
-            const inboundAt =
-              r.rec.lastInboundAt ?? (lastReplyOurs ? 0 : lastActivity);
+            // Stats merge bumps threadLastAt for ANY new reply — including
+            // ones we can't decrypt. Treat it as inbound only when it's
+            // newer than the newest reply WE sent in this thread (our
+            // bottle.createdAt is the same clock domain as threadLastAt).
+            // lastInboundAt covers replies we've actually decrypted.
+            const ownLatest = Math.max(
+              0,
+              ...state.records
+                .filter(
+                  (m) =>
+                    m.id.startsWith("sent:") &&
+                    (m.bottle?.id === bottleId || m.bottle?.rootId === bottleId)
+                )
+                .map((m) => m.bottle?.createdAt || 0)
+            );
+            const statInbound = lastActivity > ownLatest ? lastActivity : 0;
+            const inboundAt = Math.max(r.rec.lastInboundAt || 0, statInbound);
             const hasNewReplies =
               weInThread && inboundAt > 0 && inboundAt * 1000 > (r.rec.repliesSeenAt || 0);
             return (
