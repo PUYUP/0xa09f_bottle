@@ -1,4 +1,5 @@
 import type { ThreadRecord } from "@shared/types";
+import { getServerOffsetSec } from "@shared/store";
 
 // Unread-reply badge for a thread root record: true when we participate in
 // the thread (authored root or sent a reply inside) and inbound reply
@@ -25,7 +26,10 @@ export function hasUnreadReplies(rec: ThreadRecord, records: ThreadRecord[]): bo
       return c > 1e11 ? Math.floor(c / 1000) : c;
     })
   );
-  const statInbound = lastActivity > ownLatest ? lastActivity : 0;
+  // ownLatest is client-clock; lastActivity is server-clock — normalize by
+  // the learned server offset so own replies don't fake inbound activity.
+  const off = getServerOffsetSec();
+  const statInbound = lastActivity > ownLatest + off ? lastActivity : 0;
   const inboundAt = Math.max(rec.lastInboundAt || 0, statInbound);
-  return inboundAt > 0 && inboundAt * 1000 > (rec.repliesSeenAt || 0);
+  return inboundAt > 0 && inboundAt * 1000 > (rec.repliesSeenAt || 0) + off * 1000;
 }

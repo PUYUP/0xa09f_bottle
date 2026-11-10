@@ -11,6 +11,7 @@ import {
   dropBottle,
   formatTTL,
   generateAndDeposit,
+  getServerOffsetSec,
   init,
   log,
   openThread,
@@ -741,10 +742,17 @@ export default function App() {
                   return c > 1e11 ? Math.floor(c / 1000) : c;
                 })
             );
-            const statInbound = lastActivity > ownLatest ? lastActivity : 0;
+            // ownLatest is stamped by OUR clock (client-side createdAt);
+            // lastActivity/threadLastAt are stamped by the SERVER. Add the
+            // learned server offset so our own replies can't fake inbound
+            // activity just because send+receive crossed a second boundary.
+            const off = getServerOffsetSec();
+            const statInbound = lastActivity > ownLatest + off ? lastActivity : 0;
             const inboundAt = Math.max(r.rec.lastInboundAt || 0, statInbound);
             const hasNewReplies =
-              weInThread && inboundAt > 0 && inboundAt * 1000 > (r.rec.repliesSeenAt || 0);
+              weInThread &&
+              inboundAt > 0 &&
+              inboundAt * 1000 > (r.rec.repliesSeenAt || 0) + off * 1000;
             if (hasNewReplies) {
               console.log("[badge]", {
                 bottle: bottleId.slice(0, 8),

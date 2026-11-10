@@ -729,15 +729,27 @@ export async function fetchThreadBottles(rootId: string, token: string, limit = 
 // fetchThreadStats returns aggregate reply stats for many thread roots in a
 // single request — used for unread badges so the client doesn't have to
 // fetch every thread subtree just to know activity changed.
+// Server clock offset (seconds): bottle.createdAt/threadLastAt are stamped
+// by the server, while repliesSeenAt/readAt use the local clock. Badge
+// comparisons mix both domains, so we learn the offset from the stats
+// endpoint's `now` field and normalize at compare time.
+let serverOffsetSec = 0;
+export function getServerOffsetSec(): number {
+  return serverOffsetSec;
+}
+
 async function fetchThreadStats(
   roots: string[],
   token: string
 ): Promise<Record<string, { count: number; lastAt: number }>> {
-  const { stats = {} } = await api<{ stats?: Record<string, { count: number; lastAt: number }> }>(
+  const res = await api<{ stats?: Record<string, { count: number; lastAt: number }>; now?: number }>(
     `/api/threads/stats?roots=${encodeURIComponent(roots.join(","))}&token=${encodeURIComponent(token)}`,
     { auth: false }
   );
-  return stats;
+  if (typeof res.now === "number") {
+    serverOffsetSec = res.now - Math.floor(Date.now() / 1000);
+  }
+  return res.stats || {};
 }
 
 const caughtThisSession = new Set<string>();

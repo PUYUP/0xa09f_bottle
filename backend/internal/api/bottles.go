@@ -434,7 +434,7 @@ func (s *Server) listThreadStats(c fiber.Ctx) error {
 			}
 		}
 	}
-	return c.JSON(fiber.Map{"stats": out})
+	return c.JSON(fiber.Map{"stats": out, "now": time.Now().Unix()})
 }
 
 func parseKidFilter(raw string) map[string]struct{} {
