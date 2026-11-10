@@ -2240,6 +2240,14 @@ export async function init() {
   // Re-subscribe periodically so the kid filter picks up newly known
   // threads and rotated pool keys even if the tab stays open for days.
   setInterval(() => connectEvents().catch(() => {}), 60000);
+  // Polling safety net: SSE is best-effort — if the stream stalls or the
+  // proxy buffers events, inbox scan + thread stats still refresh every
+  // 20s so badges and chats update without a manual refresh.
+  setInterval(() => {
+    if (document.visibilityState === "visible") {
+      checkBottles().catch(() => {});
+    }
+  }, 20000);
 }
 
 export { getIdentityRecord };
