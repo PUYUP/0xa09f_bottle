@@ -1198,16 +1198,10 @@ export async function fetchThreadChildren(parentId: string): Promise<number> {
   return n;
 }
 
-// openThread fetches unseen replies for a bottle and marks the thread as
-// seen so the new-activity badge clears.
-export async function openThread(bottleId: string) {
-  const opened =
-    (await idbGet<ThreadRecord>(META_STORE, `sent:${bottleId}`).catch(() => null)) ??
-    (await idbGet<ThreadRecord>(META_STORE, `caught:${bottleId}`).catch(() => null));
-  const threadRoot = opened?.bottle?.rootId || bottleId;
-  // One shot: prove reply:<id> for every bottle we authored in this thread
-  // (replies to our bottles are the only decryptable ones) plus the inbox
-  // kid set, then fetch the whole subtree in a single request.
+// fetchThreadInto pulls the whole readable subtree of a thread and processes
+// every bottle (stats + decrypt). Shared by openThread (which then marks the
+// thread seen) and refreshThreadActivity (background badge/count refresh).
+async function fetchThreadInto(threadRoot: string) {
   const meta = await idbGetAll<ThreadRecord>(META_STORE).catch(() => [] as ThreadRecord[]);
   const replyKids = meta
     .filter(
@@ -1221,16 +1215,47 @@ export async function openThread(bottleId: string) {
   const inbox = await catchKidsParam();
   const kids = [...(inbox ? inbox.split(",") : []), ...replyKids];
   const token = await popTokenFor(kids).catch(() => null);
-  if (token) {
-    const bottles = await fetchThreadBottles(threadRoot, token).catch(() => []);
-    const byKid = keyByKidMap();
-    for (const b of bottles) {
-      await applyBottleStats(b);
-      await bumpThreadActivity(b);
-      await processBottle(b, byKid);
-    }
-    await renderInbox();
+  if (!token) return;
+  const bottles = await fetchThreadBottles(threadRoot, token).catch(() => []);
+  const byKid = keyByKidMap();
+  for (const b of bottles) {
+    await applyBottleStats(b);
+    await bumpThreadActivity(b);
+    await processBottle(b, byKid);
   }
+  await renderInbox();
+}
+
+// refreshThreadActivity re-fetches threads we participate in (authored root
+// or sent a reply inside) so stats and readable replies stay fresh without
+// opening them — this is what makes the unread badge and reply counts work
+// for recipients whose root bottle no longer appears in inbox scans.
+export async function refreshThreadActivity() {
+  const meta = await idbGetAll<ThreadRecord>(META_STORE).catch(() => [] as ThreadRecord[]);
+  const roots = new Map<string, number>();
+  for (const m of meta) {
+    if (typeof m.id !== "string" || !m.id.startsWith("sent:") || !m.bottle) continue;
+    const root = m.bottle.rootId || (m.bottle.parentId ? "" : m.bottle.id);
+    if (!root) continue;
+    roots.set(root, Math.max(roots.get(root) || 0, m.bottle.createdAt || 0));
+  }
+  const list = [...roots.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([id]) => id);
+  for (const root of list) {
+    await fetchThreadInto(root).catch(() => {});
+  }
+}
+
+// openThread fetches unseen replies for a bottle and marks the thread as
+// seen so the new-activity badge clears.
+export async function openThread(bottleId: string) {
+  const opened =
+    (await idbGet<ThreadRecord>(META_STORE, `sent:${bottleId}`).catch(() => null)) ??
+    (await idbGet<ThreadRecord>(META_STORE, `caught:${bottleId}`).catch(() => null));
+  const threadRoot = opened?.bottle?.rootId || bottleId;
+  await fetchThreadInto(threadRoot);
   const seen = Date.now();
   // Mark both the opened bottle and its thread root as seen — the unread
   // badge lives on the root record's threadLastAt.
@@ -1308,6 +1333,9 @@ export async function checkBottles() {
   }
   await renderInbox();
   await refreshActivePoolKeys();
+  // Refresh threads we participate in so reply stats/badges/counts stay
+  // fresh even though replies never appear in the inbox scan itself.
+  refreshThreadActivity().catch(() => {});
   connectEvents().catch(() => {});
   evictMetaOverflow().catch(() => {});
   log(`checked ${scanned} bottle(s); caught ${caught}`);
