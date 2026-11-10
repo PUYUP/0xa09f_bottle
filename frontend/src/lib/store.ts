@@ -1,4 +1,5 @@
-import { api, API_BASE } from "./api";
+import { api, API_BASE, getServerOffsetSec, noteServerTime } from "./api";
+export { getServerOffsetSec };
 import {
   BOTTLE_QUOTA,
   MAX_LOCAL_KEYS,
@@ -733,15 +734,10 @@ export async function fetchThreadBottles(rootId: string, token: string, limit = 
 // fetchThreadStats returns aggregate reply stats for many thread roots in a
 // single request — used for unread badges so the client doesn't have to
 // fetch every thread subtree just to know activity changed.
-// Server clock offset (seconds): bottle.createdAt/threadLastAt are stamped
-// by the server, while repliesSeenAt/readAt use the local clock. Badge
-// comparisons mix both domains, so we learn the offset from the stats
-// endpoint's `now` field and normalize at compare time.
-let serverOffsetSec = 0;
-export function getServerOffsetSec(): number {
-  return serverOffsetSec;
-}
-
+// Server clock offset lives in api.ts — learned from the HTTP Date header
+// on every response (and refined by the stats endpoint's `now` field).
+// bottle.createdAt/threadLastAt are server-stamped while repliesSeenAt uses
+// the local clock, so badge comparisons normalize via getServerOffsetSec.
 async function fetchThreadStats(
   roots: string[],
   token: string
@@ -751,7 +747,7 @@ async function fetchThreadStats(
     { auth: false }
   );
   if (typeof res.now === "number") {
-    serverOffsetSec = res.now - Math.floor(Date.now() / 1000);
+    noteServerTime(res.now);
   }
   return res.stats || {};
 }
@@ -1047,6 +1043,15 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
     (await idbGet<ThreadRecord>(META_STORE, `sent:${bottle.id}`).catch(() => null));
   if (existing?.plain && existing.claim?.ok !== false) {
     caughtThisSession.add(bottle.id);
+    // Reconcile the server-stamped createdAt onto the local record: our
+    // optimistic sent: copy carries the client clock, and unread-badge math
+    // compares it against server timestamps — without this our own replies
+    // can look "newer than ourselves" whenever send+receive crosses a
+    // second boundary.
+    if (existing.bottle && bottle.createdAt && existing.bottle.createdAt !== bottle.createdAt) {
+      existing.bottle.createdAt = bottle.createdAt;
+      await idbPut(META_STORE, existing).catch(() => {});
+    }
     return false;
   }
   for (const envelope of bottle.envelopes || []) {

@@ -12,6 +12,21 @@ export class ApiError extends Error {
   }
 }
 
+// Server clock offset (seconds) learned from the HTTP Date header on every
+// response — bottle timestamps are server-stamped while local read markers
+// use the client clock, so badge comparisons need this normalization.
+let serverOffsetSec = 0;
+export function getServerOffsetSec(): number {
+  return serverOffsetSec;
+}
+
+// noteServerTime refines the offset from an explicit server timestamp
+// (e.g. the stats endpoint's `now` field) — same second resolution as the
+// Date header but doesn't depend on header parsing.
+export function noteServerTime(serverSec: number) {
+  serverOffsetSec = serverSec - Math.floor(Date.now() / 1000);
+}
+
 export async function api<T = unknown>(
   path: string,
   options: RequestInit & { auth?: boolean } = {}
@@ -26,6 +41,13 @@ export async function api<T = unknown>(
       ...(rest.headers || {}),
     },
   });
+  const dateHdr = res.headers.get("date");
+  if (dateHdr) {
+    const serverSec = Math.floor(new Date(dateHdr).getTime() / 1000);
+    if (!Number.isNaN(serverSec)) {
+      serverOffsetSec = serverSec - Math.floor(Date.now() / 1000);
+    }
+  }
   const text = await res.text();
   let data: unknown = null;
   if (text) {
