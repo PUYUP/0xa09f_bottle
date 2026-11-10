@@ -549,26 +549,24 @@ func (p *PGStore) RegisterKidPubkeys(ctx context.Context, pubs map[string][]stri
 	if len(pubs) == 0 {
 		return nil
 	}
-	type pair struct {
-		kid, pub string
-	}
-	pairs := make([]pair, 0, len(pubs))
+	kids := make([]string, 0, len(pubs))
+	pubsFlat := make([]string, 0, len(pubs))
 	for kid, list := range pubs {
 		for _, pub := range list {
-			pairs = append(pairs, pair{kid, pub})
+			kids = append(kids, kid)
+			pubsFlat = append(pubsFlat, pub)
 		}
 	}
 	now := time.Now().Unix()
-	for _, pr := range pairs {
-		if _, err := p.pool.Exec(ctx, `
+	// One round-trip for the whole batch — a per-row Exec loop put ~70
+	// sequential queries on the pop-token critical path (~9s observed).
+	_, err := p.pool.Exec(ctx, `
 INSERT INTO kid_pubkeys (kid, pubkey, created_at)
-SELECT $1, $2, $3
-WHERE (SELECT count(*) FROM kid_pubkeys WHERE kid = $1) < 16
-ON CONFLICT (kid, pubkey) DO NOTHING`, pr.kid, pr.pub, now); err != nil {
-			return err
-		}
-	}
-	return nil
+SELECT k.kid, k.pubkey, $3
+FROM unnest($1::text[], $2::text[]) AS k(kid, pubkey)
+WHERE (SELECT count(*) FROM kid_pubkeys kp WHERE kp.kid = k.kid) < 16
+ON CONFLICT (kid, pubkey) DO NOTHING`, kids, pubsFlat, now)
+	return err
 }
 
 // RunRetention prunes operational tables that grow unboundedly. User-facing
