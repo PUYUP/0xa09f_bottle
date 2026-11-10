@@ -22,6 +22,9 @@ services:
       # delivery/thread consistency is validated. Remove this line (and keep
       # REDIS_URL) to switch back to the Redis hot store.
       - PG_ONLY=true
+      # Optional read-through cache in front of Postgres — never
+      # authoritative; if Redis is down the API falls back to PG directly.
+      - REDIS_CACHE=true
     ports:
       - "127.0.0.1:8080:8080"   # localhost only — terminate TLS at the proxy
     # No depends_on: PG_ONLY mode never connects to Redis. Re-add

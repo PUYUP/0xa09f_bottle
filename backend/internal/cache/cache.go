@@ -146,6 +146,14 @@ func (s *Store) GetInt(ctx context.Context, key string) int64 {
 	return v
 }
 
+// Ping reports whether Redis is reachable — used by /api/metrics.
+func (s *Store) Ping(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	return s.rdb.Ping(ctx).Err()
+}
+
 func (s *Store) Close() {
 	if s != nil {
 		_ = s.rdb.Close()

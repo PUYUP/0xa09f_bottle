@@ -180,23 +180,29 @@ func (s *Server) ready(c fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
 	defer cancel()
 
-	if err := s.store.Ping(ctx); err != nil {
+	storeOK := s.store.Ping(ctx) == nil
+	if !storeOK {
 		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 			"status": "unhealthy",
 			"error":  "store unavailable",
 		})
 	}
-	if s.pg != nil && !s.pgBacked {
-		if err := s.pg.Ping(ctx); err != nil {
+	pgOK := true
+	if s.pg != nil {
+		pgOK = s.pg.Ping(ctx) == nil
+		if !pgOK && !s.pgBacked {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"status": "unhealthy",
 				"error":  "postgres unavailable",
 			})
 		}
 	}
+	cacheOK := s.cache == nil || s.cache.Ping(ctx) == nil
 	return c.JSON(fiber.Map{
 		"status": "ready",
 		"store":  "ok",
-		"pg":     s.pg != nil,
+		"pg":     pgOK,
+		"cache":  s.cache != nil,
+		"cacheOK": cacheOK,
 	})
 }

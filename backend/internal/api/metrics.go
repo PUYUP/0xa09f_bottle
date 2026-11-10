@@ -53,8 +53,13 @@ func (s *Server) metricsHandler(c fiber.Ctx) error {
 	deps := fiber.Map{}
 	deps["store"] = s.store.Ping(ctx) == nil
 	deps["pg_only"] = s.pgBacked
-	if s.pg != nil && !s.pgBacked {
+	// PG is pinged directly in both modes — in PG_ONLY it IS the live store,
+	// and gating this on !pgBacked made pg_down fire as a false alert.
+	if s.pg != nil {
 		deps["pg"] = s.pg.Ping(ctx) == nil
+	}
+	if s.cache != nil {
+		deps["cache"] = s.cache.Ping(ctx) == nil
 	}
 	cancel()
 

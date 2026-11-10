@@ -94,8 +94,11 @@ async function tick() {
     const ok = ready.status === "ready";
     if (!ok) allOk = false;
     rows.push(row("readiness", ok ? "ready" : (ready.error || "not ready"), ok ? "ok" : "bad"));
-    rows.push(row("redis", ready.redis || "?", ready.redis === "ok" ? "ok" : "bad"));
-    rows.push(row("postgres", ready.pg ? "connected" : "disabled", "muted"));
+    rows.push(row("store", ready.store || "?", ready.store === "ok" ? "ok" : "bad"));
+    rows.push(row("postgres", ready.pg ? "connected" : "down", ready.pg ? "muted" : "bad"));
+    if (ready.cache) {
+      rows.push(row("redis cache", ready.cacheOK ? "up" : "down (pg fallback)", ready.cacheOK ? "ok" : "bad"));
+    }
   } catch (e) {
     rows.push(row("readiness", "check failed", "bad"));
     allOk = false;
