@@ -754,6 +754,19 @@ export default function App() {
             const inboundAt = Math.max(r.rec.lastInboundAt || 0, statInbound);
             const hasNewReplies =
               weInThread && inboundAt > 0 && inboundAt * 1000 > (r.rec.repliesSeenAt || 0);
+            if (hasNewReplies) {
+              console.log("[badge]", {
+                bottle: bottleId.slice(0, 8),
+                lastActivity,
+                ownLatest,
+                lastInboundAt: r.rec.lastInboundAt,
+                repliesSeenAt: r.rec.repliesSeenAt,
+                threadLastAt: r.rec.threadLastAt,
+                lastChildAt: r.rec.lastChildAt,
+                lastReplyId: r.rec.lastReplyId,
+                isSent,
+              });
+            }
             return (
               <div
                 key={r.rec.id}
