@@ -1513,6 +1513,7 @@ export async function connectEvents() {
   if (url === eventsUrl && eventsSource) return;
   eventsSource?.close();
   eventsUrl = url;
+  console.log("[sse] subscribing, kids:", kidsParam.split(",").length);
   try {
     eventsSource = new EventSource(url);
     eventsSource.addEventListener("bottle", (ev) => {
@@ -1533,6 +1534,7 @@ export async function connectEvents() {
       scheduleCatchScan();
       scheduleActivityRefresh();
     });
+    eventsSource.onerror = () => console.log("[sse] connection error — will retry");
   } catch {
     eventsSource = null;
   }
