@@ -704,15 +704,18 @@ export default function App() {
               </div>
             ))}
           {threads.slice(0, threadLimit).map((r) => {
-            // Reply count: prefer the server-reported thread total (replies
-            // at any depth) over locally loaded children — replies are
-            // fetched lazily, so countReplies alone shows 0 until opened.
-            const replies = Math.max(
-              countReplies(r),
-              r.rec.threadCount || 0,
-              r.rec.childCount || 0
-            );
+            // Reply count = locally-readable descendants only. Server
+            // threadCount/childCount counts EVERY participant's replies —
+            // including conversations between other users we can't decrypt —
+            // so it must not be displayed. "…" means replies to our own
+            // bottle are still being fetched.
             const isSent = r.rec.claim?.status === "SENT";
+            const replies = countReplies(r);
+            const repliesPending =
+              isSent &&
+              (r.rec.childCount || 0) > 0 &&
+              replies === 0 &&
+              threadLoads > 0;
             const bottleId = r.rec.bottle?.id || "";
             // Badge: thread-level reply activity (any depth, via rootId)
             // newer than what we've opened. Show it when we participate in
@@ -753,6 +756,7 @@ export default function App() {
                   {r.rec.claim?.status || "CLAIMED"} · {r.rec.claim?.deliveries ?? "?"}/{r.rec.bottle?.maxDeliveries}
                   {isSent && " · (yours)"}
                   {replies > 0 && <span className="text-blue-800"> · 💬 {replies} repl{replies === 1 ? "y" : "ies"}</span>}
+                  {repliesPending && <span className="text-blue-800"> · 💬 …</span>}
                   {hasNewReplies && (
                     <span className="ml-1 rounded-sm bg-red-600 px-1 font-bold text-white">
                       ● new
