@@ -8,6 +8,7 @@ import {
   IonList,
   IonModal,
   IonNote,
+  IonPage,
   IonSpinner,
   IonHeader,
   IonToolbar,
@@ -61,13 +62,13 @@ export function AccountPage({
   };
 
   return (
-    <>
+    <IonPage>
       <IonHeader>
         <IonToolbar color="primary">
           <IonTitle>account</IonTitle>
         </IonToolbar>
       </IonHeader>
-      <div className="tab-scroll ion-padding">
+      <IonContent className="ion-padding">
       {/* identity */}
       <IonItem lines="full" className="ion-margin-top">
         <IonLabel>
@@ -246,7 +247,7 @@ export function AccountPage({
           </IonList>
         </IonContent>
       </IonModal>
-      </div>
-    </>
+      </IonContent>
+    </IonPage>
   );
 }

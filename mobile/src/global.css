@@ -18,11 +18,11 @@ ion-tab:not(.tab-hidden) {
   flex: 1;
   min-height: 0;
 }
-.tab-scroll {
+/* Each screen is a standard IonPage: header stays fixed, IonContent owns
+   the scroll. ion-page needs explicit flex sizing inside ion-tab. */
+ion-tab > .ion-page {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
 }
 
 /* Bait card animations — live bait bobs gently like a float on water. */
@@ -70,4 +70,46 @@ ion-tab:not(.tab-hidden) {
 }
 .bait-blue {
   color: #1a5276;
+}
+
+/* WhatsApp-style message bubbles — straight line, no depth indent. */
+.wa-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+.wa-own {
+  align-items: flex-end;
+}
+.wa-bubble {
+  max-width: 78%;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--ion-color-light, #f1f1f4);
+  font-size: 14px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-bottom-left-radius: 4px;
+}
+.wa-own .wa-bubble {
+  background: #d9fdd3;
+  border-bottom-left-radius: 12px;
+  border-bottom-right-radius: 4px;
+}
+.wa-deleted {
+  font-style: italic;
+  color: var(--ion-color-medium);
+}
+.wa-meta {
+  margin-top: 2px;
+  font-size: 11px;
+}
+.wa-own .wa-meta {
+  text-align: right;
+}
+.wa-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
 }

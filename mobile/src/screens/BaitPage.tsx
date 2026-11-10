@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   IonAlert,
   IonButton,
+  IonContent,
   IonIcon,
   IonHeader,
   IonItem,
   IonLabel,
   IonList,
   IonNote,
+  IonPage,
   IonTitle,
   IonToolbar,
 } from "@ionic/react";
@@ -94,13 +96,13 @@ export function BaitPage() {
   };
 
   return (
-    <>
+    <IonPage>
       <IonHeader>
         <IonToolbar color="primary">
           <IonTitle>bait</IonTitle>
         </IonToolbar>
       </IonHeader>
-      <div className="tab-scroll ion-padding">
+      <IonContent className="ion-padding">
       <IonButton expand="block" className="ion-margin-top" onClick={() => setBaitOpen(true)}>
         <IonIcon icon={fish} slot="start" />
         throw bait
@@ -278,8 +280,8 @@ export function BaitPage() {
           },
         ]}
       />
-      </div>
-    </>
+      </IonContent>
+    </IonPage>
   );
 }
 

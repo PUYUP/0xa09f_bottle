@@ -24,16 +24,19 @@ function MessageNode({
   const isSent = claim?.status === "SENT";
   const canReply =
     !!plain?.reply && depth < MAX_THREAD_DEPTH && !isSent && !sentIds.has(bottle!.id);
-  // Reply indicator: server-reported direct-child count vs what's loaded
-  // locally — "▸" means replies exist but haven't been fetched yet (tap the
-  // message to load them lazily).
-  const childTotal = node.rec.childCount || 0;
-  const childLoaded = node.children.length;
+  // Reply count = locally-readable descendants only. Server childCount
+  // counts EVERY participant's replies (including conversations between
+  // other users we can't decrypt) — showing it would leak their existence.
+  // "… ⏳" appears only on nodes we authored whose replies are still fetching.
+  const replyTotal = countReplies(node);
+  const authoredByUs = sentIds.has(bottle?.id || "");
+  const repliesPending =
+    authoredByUs && (node.rec.childCount || 0) > node.children.length;
   const replyTag =
-    childTotal > childLoaded
-      ? ` · 💬 ${childTotal} repl${childTotal === 1 ? "y" : "ies"} ▸${busy ? " ⏳" : ""}`
-      : childLoaded > 0
-        ? ` · 💬 ${childLoaded} repl${childLoaded === 1 ? "y" : "ies"}`
+    replyTotal > 0
+      ? ` · 💬 ${replyTotal} repl${replyTotal === 1 ? "y" : "ies"}`
+      : repliesPending
+        ? ` · 💬 …${busy ? " ⏳" : ""}`
         : "";
 
   return (

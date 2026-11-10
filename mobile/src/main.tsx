@@ -16,7 +16,7 @@ import "@ionic/react/css/display.css";
 import App from "./App";
 import "./global.css";
 
-setupIonicReact();
+setupIonicReact({ mode: "md" });
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

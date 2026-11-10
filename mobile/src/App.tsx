@@ -19,6 +19,8 @@ import {
   IonBadge,
   IonFab,
   IonFabButton,
+  IonPage,
+  IonRouterOutlet,
 } from "@ionic/react";
 import {
   send,
@@ -29,6 +31,8 @@ import {
   fishOutline,
   personOutline,
 } from "ionicons/icons";
+import { Route, useHistory } from "react-router-dom";
+import { IonReactRouter } from "@ionic/react-router";
 import { getState, subscribe } from "@shared/store";
 import {
   init,
@@ -42,10 +46,11 @@ import {
 import { getIdentity, randomUsername as genName } from "@shared/identity";
 import { hasUnreadReplies } from "./lib/unread";
 import { TermsContent, PrivacyContent, HowItWorksContent } from "./legal";
-import { CatchPage } from "./pages/CatchPage";
-import { BaitPage } from "./pages/BaitPage";
-import { AccountPage } from "./pages/AccountPage";
+import { CatchPage } from "./screens/CatchPage";
+import { BaitPage } from "./screens/BaitPage";
+import { AccountPage } from "./screens/AccountPage";
 import { CastModal } from "./components/CastModal";
+import { ChatScreen } from "./screens/ChatScreen";
 import type { IdentityRecord } from "@shared/types";
 
 export default function App() {
@@ -189,7 +194,14 @@ export default function App() {
 
   return (
     <IonApp>
-      <IonTabs>
+      <IonReactRouter>
+        <IonRouterOutlet>
+          {/* standalone chat page — no tab bar, own IonFooter reply form */}
+          <Route exact path="/bottles/:id" component={ChatScreen} />
+          {/* everything else → the three tabs (exact: /bottles/:id is separate) */}
+          <Route exact path="/">
+            <IonPage>
+              <IonTabs>
         <IonTab tab="catch">
           <CatchPage />
         </IonTab>
@@ -232,48 +244,71 @@ export default function App() {
             <IonIcon icon={send} />
           </IonFabButton>
         </IonFab>
-      </IonTabs>
+              </IonTabs>
+            </IonPage>
+          </Route>
+        </IonRouterOutlet>
 
-      <CastModal
-        open={castOpen}
-        busy={busy}
-        onClose={() => setCastOpen(false)}
-        onCast={(text) =>
-          run(async () => {
-            await dropBottle(text, "86400");
-          })
-        }
-      />
+        <CastModal
+          open={castOpen}
+          busy={busy}
+          onClose={() => setCastOpen(false)}
+          onCast={(text) =>
+            run(async () => {
+              await dropBottle(text, "86400");
+            })
+          }
+        />
 
-      {/* terms & privacy */}
-      <LegalModal kind={legal} onClose={() => setLegal(null)} />
+        {/* terms & privacy */}
+        <LegalModal kind={legal} onClose={() => setLegal(null)} />
 
-      {catchToast && (
-        <div
-          onClick={() => {
+        <CatchToast
+          show={catchToast}
+          onPress={() => {
             setCatchToast(false);
-            (document.querySelector("ion-tabs") as HTMLIonTabsElement | null)?.select("catch");
             run(checkBottles);
           }}
-          style={{
-            position: "fixed",
-            bottom: "calc(150px + env(safe-area-inset-bottom, 0px))",
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 9999,
-            background: "var(--ion-color-primary)",
-            color: "#fff",
-            padding: "10px 18px",
-            borderRadius: 20,
-            fontSize: 14,
-            boxShadow: "0 4px 12px rgba(0,0,0,.3)",
-            cursor: "pointer",
-          }}
-        >
-          🎣 something bit! — tap to check catch
-        </div>
-      )}
+        />
+      </IonReactRouter>
     </IonApp>
+  );
+}
+
+// New-catch toast — lives inside the router so it can navigate back to the
+// catch tab even when the user is on a standalone /bottles/:id page.
+function CatchToast({ show, onPress }: { show: boolean; onPress: () => void }) {
+  const history = useHistory();
+  if (!show) return null;
+  return (
+    <div
+      onClick={() => {
+        history.push("/");
+        // after the tabs remount (or if already there), land on catch
+        setTimeout(
+          () =>
+            (document.querySelector("ion-tabs") as HTMLIonTabsElement | null)?.select("catch"),
+          60
+        );
+        onPress();
+      }}
+      style={{
+        position: "fixed",
+        bottom: "calc(150px + env(safe-area-inset-bottom, 0px))",
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 9999,
+        background: "var(--ion-color-primary)",
+        color: "#fff",
+        padding: "10px 18px",
+        borderRadius: 20,
+        fontSize: 14,
+        boxShadow: "0 4px 12px rgba(0,0,0,.3)",
+        cursor: "pointer",
+      }}
+    >
+      🎣 something bit! — tap to check catch
+    </div>
   );
 }
 
