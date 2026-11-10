@@ -24,3 +24,50 @@ ion-tab:not(.tab-hidden) {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
+
+/* Bait card animations — live bait bobs gently like a float on water. */
+@keyframes baitBob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-4deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(4deg);
+  }
+}
+@keyframes baitRipple {
+  0% {
+    box-shadow: 0 0 0 0 rgba(45, 211, 91, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 6px rgba(45, 211, 91, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(45, 211, 91, 0);
+  }
+}
+.bait-live {
+  display: inline-block;
+  animation: baitBob 1.8s ease-in-out infinite;
+}
+.bait-live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2dd55b;
+  margin-right: 6px;
+  animation: baitRipple 1.8s ease-out infinite;
+}
+.bait-amber {
+  color: #b8860b;
+}
+.bait-green {
+  color: #2dd55b;
+}
+.bait-red {
+  color: #c5000f;
+}
+.bait-blue {
+  color: #1a5276;
+}

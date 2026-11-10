@@ -62,6 +62,12 @@ export function AccountPage({
 
   return (
     <>
+      <IonHeader>
+        <IonToolbar color="primary">
+          <IonTitle>account</IonTitle>
+        </IonToolbar>
+      </IonHeader>
+      <div className="tab-scroll ion-padding">
       {/* identity */}
       <IonItem lines="full" className="ion-margin-top">
         <IonLabel>
@@ -240,6 +246,7 @@ export function AccountPage({
           </IonList>
         </IonContent>
       </IonModal>
+      </div>
     </>
   );
 }

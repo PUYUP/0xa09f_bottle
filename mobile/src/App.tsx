@@ -10,7 +10,6 @@ import {
   IonInput,
   IonItem,
   IonLabel,
-  IonSpinner,
   IonIcon,
   IonModal,
   IonTabBar,
@@ -38,10 +37,7 @@ import {
   generateAndDeposit,
   log,
   claimUsernameUI,
-  exportVault,
   importVaultFile,
-  vaultReminderState,
-  snoozeVaultReminder,
 } from "@shared/store";
 import { getIdentity, randomUsername as genName } from "@shared/identity";
 import { hasUnreadReplies } from "./lib/unread";
@@ -56,7 +52,6 @@ export default function App() {
   const state = useSyncExternalStore(subscribe, getState);
   const [castOpen, setCastOpen] = useState(false);
   const [legal, setLegal] = useState<"terms" | "privacy" | "how" | null>(null);
-  const [vaultDue, setVaultDue] = useState(false);
   const [busy, setBusy] = useState(false);
   const [identity, setIdentity] = useState<IdentityRecord | null>(null);
   const [claimName, setClaimName] = useState("");
@@ -83,14 +78,6 @@ export default function App() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.ready, state.keys.length, identity?.username]);
-
-  // Vault backup reminder — losing the device without an export loses
-  // every message forever.
-  useEffect(() => {
-    vaultReminderState()
-      .then((r) => setVaultDue(r.due))
-      .catch(() => {});
-  }, []);
 
   // New-catch toast: an SSE bottle event means something landed on our bait.
   useEffect(() => {
@@ -202,88 +189,17 @@ export default function App() {
 
   return (
     <IonApp>
-      <IonHeader>
-        <IonToolbar color="primary">
-          <IonTitle>a09f</IonTitle>
-          <IonButtons slot="end">
-            <IonButton onClick={() => run(checkBottles)} disabled={busy}>
-              <IonIcon icon={refresh} slot="icon-only" />
-            </IonButton>
-          </IonButtons>
-        </IonToolbar>
-      </IonHeader>
-
       <IonTabs>
         <IonTab tab="catch">
-          <div className="tab-scroll ion-padding">
-            {vaultDue && (
-              <IonItem
-                lines="full"
-                className="ion-margin-top"
-                style={{ "--background": "#fff3cd", "--color": "#333" } as React.CSSProperties}
-              >
-                <IonLabel>
-                  <strong>🔑 backup your vault</strong>
-                  <p>no export yet — lose this device and every message is gone forever</p>
-                </IonLabel>
-                <IonButton
-                  slot="end"
-                  size="small"
-                  onClick={() =>
-                    exportVault()
-                      .then(() => vaultReminderState().then((r) => setVaultDue(r.due)))
-                      .catch((e) => log(`export: ${(e as Error).message}`, "err"))
-                  }
-                >
-                  export
-                </IonButton>
-                <IonButton
-                  slot="end"
-                  size="small"
-                  fill="clear"
-                  onClick={async () => {
-                    await snoozeVaultReminder();
-                    setVaultDue(false);
-                  }}
-                >
-                  later
-                </IonButton>
-              </IonItem>
-            )}
-
-            <CatchPage />
-
-            {busy && (
-              <div className="ion-text-center ion-padding">
-                <IonSpinner name="crescent" />
-              </div>
-            )}
-
-            {/* system log */}
-            {state.logs.length > 0 && (
-              <IonItem lines="none" className="ion-no-padding">
-                <IonLabel>
-                  {state.logs.slice(0, 5).map((l) => (
-                    <p key={l.id} style={{ fontSize: 12, margin: "2px 0" }}>
-                      [{l.time}] {l.msg}
-                    </p>
-                  ))}
-                </IonLabel>
-              </IonItem>
-            )}
-          </div>
+          <CatchPage />
         </IonTab>
 
         <IonTab tab="bait">
-          <div className="tab-scroll ion-padding">
-            <BaitPage />
-          </div>
+          <BaitPage />
         </IonTab>
 
         <IonTab tab="account">
-          <div className="tab-scroll ion-padding">
-            <AccountPage identity={identity} onIdentity={setIdentity} onLegal={setLegal} />
-          </div>
+          <AccountPage identity={identity} onIdentity={setIdentity} onLegal={setLegal} />
         </IonTab>
 
         <IonTabBar slot="bottom">

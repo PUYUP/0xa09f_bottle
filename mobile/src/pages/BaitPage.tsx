@@ -3,10 +3,13 @@ import {
   IonAlert,
   IonButton,
   IonIcon,
+  IonHeader,
   IonItem,
   IonLabel,
   IonList,
   IonNote,
+  IonTitle,
+  IonToolbar,
 } from "@ionic/react";
 import { fish, refresh } from "ionicons/icons";
 import {
@@ -92,6 +95,12 @@ export function BaitPage() {
 
   return (
     <>
+      <IonHeader>
+        <IonToolbar color="primary">
+          <IonTitle>bait</IonTitle>
+        </IonToolbar>
+      </IonHeader>
+      <div className="tab-scroll ion-padding">
       <IonButton expand="block" className="ion-margin-top" onClick={() => setBaitOpen(true)}>
         <IonIcon icon={fish} slot="start" />
         throw bait
@@ -269,6 +278,7 @@ export function BaitPage() {
           },
         ]}
       />
+      </div>
     </>
   );
 }
