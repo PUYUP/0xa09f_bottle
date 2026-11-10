@@ -1343,6 +1343,7 @@ export async function refreshThreadActivity(force = false) {
   if (!token) return;
   const stats = await fetchThreadStats(list, token).catch(() => null);
   if (!stats) {
+    console.log("[activity] stats endpoint unavailable — fallback subtree fetch");
     // Stats endpoint unavailable — fall back to fetching a few subtrees.
     for (const root of list.slice(0, 8)) {
       await fetchThreadInto(root).catch(() => {});
@@ -1356,6 +1357,7 @@ export async function refreshThreadActivity(force = false) {
     await applyThreadStatsRoot(root, st.count, st.lastAt);
     if (st.lastAt > (lastAtByRoot.get(root) || 0)) changed.push(root);
   }
+  if (changed.length) console.log("[activity] threads changed:", changed.map((id) => id.slice(0, 8)));
   await renderInbox();
   for (const root of changed.slice(0, 8)) {
     await fetchThreadInto(root).catch(() => {});
@@ -1523,6 +1525,7 @@ export async function connectEvents() {
           void markBottleDeleted(data.id);
           return;
         }
+        console.log("[sse] bottle event", data.id?.slice(0, 8));
       } catch {
         // fall through to scan
       }
