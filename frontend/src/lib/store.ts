@@ -726,6 +726,20 @@ export async function fetchThreadBottles(rootId: string, token: string, limit = 
   return bottles;
 }
 
+// fetchThreadStats returns aggregate reply stats for many thread roots in a
+// single request — used for unread badges so the client doesn't have to
+// fetch every thread subtree just to know activity changed.
+async function fetchThreadStats(
+  roots: string[],
+  token: string
+): Promise<Record<string, { count: number; lastAt: number }>> {
+  const { stats = {} } = await api<{ stats?: Record<string, { count: number; lastAt: number }> }>(
+    `/api/threads/stats?roots=${encodeURIComponent(roots.join(","))}&token=${encodeURIComponent(token)}`,
+    { auth: false }
+  );
+  return stats;
+}
+
 const caughtThisSession = new Set<string>();
 
 // catchKidsParam builds the kid set for the inbox scan and SSE subscription:
@@ -1226,24 +1240,78 @@ async function fetchThreadInto(threadRoot: string) {
   await renderInbox();
 }
 
-// refreshThreadActivity re-fetches threads we participate in (authored root
-// or sent a reply inside) so stats and readable replies stay fresh without
-// opening them — this is what makes the unread badge and reply counts work
-// for recipients whose root bottle no longer appears in inbox scans.
+// applyThreadStatsRoot writes server thread aggregates onto the root
+// bottle's local records (caught:/sent:) — same targets as applyBottleStats.
+async function applyThreadStatsRoot(rootId: string, count: number, lastAt: number) {
+  for (const prefix of ["caught:", "sent:"]) {
+    const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${rootId}`).catch(() => null);
+    if (!rec) continue;
+    let dirty = false;
+    if (count > 0 && rec.threadCount !== count) {
+      rec.threadCount = count;
+      dirty = true;
+    }
+    if (lastAt > 0 && rec.threadLastAt !== lastAt) {
+      rec.threadLastAt = lastAt;
+      dirty = true;
+    }
+    if (dirty) await idbPut(META_STORE, rec).catch(() => {});
+  }
+}
+
+const normTs = (v: number) => (v > 1e11 ? Math.floor(v / 1000) : v);
+
+// Throttle: checkBottles can fire on every SSE event, but the stats poll
+// (and any fallback subtree fetches) only needs to run periodically.
+let lastActivityRefresh = 0;
+const ACTIVITY_REFRESH_MS = 30_000;
+
+// refreshThreadActivity keeps unread badges and reply data fresh for threads
+// we participate in. One bulk stats request updates threadLastAt on every
+// followed root; only threads whose activity actually advanced get their
+// subtree fetched (to decrypt new replies for counts/details).
 export async function refreshThreadActivity() {
+  const now = Date.now();
+  if (now - lastActivityRefresh < ACTIVITY_REFRESH_MS) return;
+  lastActivityRefresh = now;
   const meta = await idbGetAll<ThreadRecord>(META_STORE).catch(() => [] as ThreadRecord[]);
-  const roots = new Map<string, number>();
+  const lastAtByRoot = new Map<string, number>();
+  const participated = new Set<string>();
   for (const m of meta) {
-    if (typeof m.id !== "string" || !m.id.startsWith("sent:") || !m.bottle) continue;
+    if (!m.bottle) continue;
     const root = m.bottle.rootId || (m.bottle.parentId ? "" : m.bottle.id);
     if (!root) continue;
-    roots.set(root, Math.max(roots.get(root) || 0, m.bottle.createdAt || 0));
+    const last = normTs(m.threadLastAt || m.lastChildAt || m.bottle.createdAt || 0);
+    lastAtByRoot.set(root, Math.max(lastAtByRoot.get(root) || 0, last));
+    if (typeof m.id === "string" && m.id.startsWith("sent:")) participated.add(root);
   }
-  const list = [...roots.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([id]) => id);
+  const list = [...participated]
+    .map((id) => ({ id, last: lastAtByRoot.get(id) || 0 }))
+    .sort((a, b) => b.last - a.last)
+    .slice(0, 100)
+    .map((e) => e.id);
+  if (list.length === 0) return;
+  const inbox = await catchKidsParam();
+  const kids = inbox ? inbox.split(",") : [];
+  const token = await popTokenFor(kids).catch(() => null);
+  if (!token) return;
+  const stats = await fetchThreadStats(list, token).catch(() => null);
+  if (!stats) {
+    // Stats endpoint unavailable — fall back to fetching a few subtrees.
+    for (const root of list.slice(0, 8)) {
+      await fetchThreadInto(root).catch(() => {});
+    }
+    return;
+  }
+  const changed: string[] = [];
   for (const root of list) {
+    const st = stats[root];
+    if (!st) continue;
+    await applyThreadStatsRoot(root, st.count, st.lastAt);
+    if (st.lastAt > (lastAtByRoot.get(root) || 0)) changed.push(root);
+  }
+  await renderInbox();
+  for (const root of changed.slice(0, 8)) {
     await fetchThreadInto(root).catch(() => {});
   }
 }

@@ -133,6 +133,7 @@ func New(ctx context.Context, cfg config.Config, st LiveStore, pg *pgstore.PGSto
 	app.Get("/api/bottles", s.listBottles)
 	app.Get("/api/bottles/:id/children", s.listBottleChildren)
 	app.Get("/api/bottles/:id/thread", s.listBottleThread)
+	app.Get("/api/threads/stats", s.listThreadStats)
 	app.Get("/api/events", s.streamEvents)
 	app.Post("/api/bottles/:id/pickup", bottleLimiter, s.pickupBottle)
 	app.Post("/api/bottles/:id/report", reportLimiter, s.reportBottle)

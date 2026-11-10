@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   IonAlert,
   IonButton,
@@ -22,13 +22,11 @@ import {
   exportVault,
   getState,
   log,
-  openThread,
   replyBottle,
   snoozeVaultReminder,
   subscribe,
   vaultReminderState,
 } from "@shared/store";
-import type { ThreadNode } from "@shared/store";
 import type { ThreadRecord } from "@shared/types";
 import { hasUnreadReplies } from "../lib/unread";
 import { useThreadRows } from "../lib/useThreads";
@@ -38,11 +36,10 @@ import { MessageRow } from "../components/MessageRow";
 export function CatchPage() {
   const state = useSyncExternalStore(subscribe, getState);
   const history = useHistory();
-  const { threads, sentIds, refresh: refreshThreads } = useThreadRows();
+  const { threads, sentIds } = useThreadRows();
   const [replyTarget, setReplyTarget] = useState<ThreadRecord | null>(null);
   const [vaultDue, setVaultDue] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const fetchingRef = useRef(false);
 
   useEffect(() => {
     vaultReminderState()
@@ -50,37 +47,9 @@ export function CatchPage() {
       .catch(() => {});
   }, []);
 
-  // Lazy reply loading: the server reports childCount per bottle, so any
-  // authored node whose children aren't all local yet gets a whole-subtree
-  // fetch via openThread — capped per cycle to stay gentle.
-  useEffect(() => {
-    if (fetchingRef.current) return;
-    const authored = new Set(
-      state.records
-        .filter((r) => r.id.startsWith("sent:"))
-        .map((r) => r.bottle?.id)
-        .filter(Boolean) as string[]
-    );
-    const missing: string[] = [];
-    const walk = (n: ThreadNode) => {
-      const bid = n.rec.bottle?.id;
-      if (bid && authored.has(bid) && (n.rec.childCount || 0) > n.children.length) {
-        missing.push(bid);
-      }
-      n.children.forEach(walk);
-    };
-    threads.forEach(walk);
-    if (!missing.length) return;
-    fetchingRef.current = true;
-    (async () => {
-      for (const id of missing.slice(0, 10)) {
-        await openThread(id).catch(() => {});
-      }
-      fetchingRef.current = false;
-      refreshThreads();
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threads, state.records]);
+  // No per-thread fetching here — the list only needs the unread badge,
+  // which refreshThreadActivity (stats-first) maintains in the background.
+  // Reply counts and message bodies load inside /bottles/:id on demand.
 
   // Chat detail is a real route (/bottles/:id) — tapping a message or an
   // eaten bait navigates there; eaten bait is dismissed like on web.

@@ -406,6 +406,37 @@ func (s *Server) listBottleThread(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{"bottles": merged, "rootId": rootID})
 }
 
+// listThreadStats returns aggregate reply stats for many thread roots in one
+// request so clients can refresh unread badges without fetching every thread
+// subtree. Any valid pop token is accepted — the same stats are already
+// exposed per-bottle by the thread endpoint.
+func (s *Server) listThreadStats(c fiber.Ctx) error {
+	if _, ok := s.store.PopTokenKids(c.Context(), c.Query("token")); !ok {
+		return fiber.NewError(fiber.StatusUnauthorized, "valid pop token required")
+	}
+	var roots []string
+	for _, id := range strings.Split(c.Query("roots"), ",") {
+		id = strings.TrimSpace(id)
+		if validBottleID(id) {
+			roots = append(roots, id)
+		}
+		if len(roots) >= 200 {
+			break
+		}
+	}
+	out := fiber.Map{}
+	if len(roots) > 0 && s.pg != nil {
+		if stats, err := s.pg.ThreadStats(c.Context(), roots); err != nil {
+			log.Printf("pg bulk thread stats: %v", err)
+		} else {
+			for id, st := range stats {
+				out[id] = fiber.Map{"count": st[0], "lastAt": st[1]}
+			}
+		}
+	}
+	return c.JSON(fiber.Map{"stats": out})
+}
+
 func parseKidFilter(raw string) map[string]struct{} {
 	if raw == "" {
 		return nil
