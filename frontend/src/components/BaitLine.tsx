@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useApp } from "../hooks/useApp";
 import { baitStatus, dismissEatenBait, openThread } from "../lib/store";
 import type { KeyRecord } from "../lib/types";
@@ -16,7 +16,7 @@ const STATUS_META: Record<string, { emoji: string; label: string; cls: string }>
 // key still in the pool bobs gently, a freshly consumed one plays an "eaten"
 // animation, and tapping an eaten bait marks its catch read and clears the
 // slot from the line.
-export function BaitLine({ onOpen }: { onOpen?: (bottleId: string) => void }) {
+export function BaitLine({ onOpen, extra }: { onOpen?: (bottleId: string) => void; extra?: ReactNode }) {
   const { keys, ownPoolKids, records } = useApp();
   const [eaten, setEaten] = useState<Map<string, number>>(new Map());
   const prevPool = useRef<Set<string> | null>(null);
@@ -86,7 +86,7 @@ export function BaitLine({ onOpen }: { onOpen?: (bottleId: string) => void }) {
         {unreadKids.has(k.kid) && <span className="bait-unread-dot">!</span>}
         <span className={`bait-emoji ${anim}`}>{meta.emoji}</span>
         <span className="bait-kid">{k.kid.slice(0, 8)}…</span>
-        <span className="bait-status">{meta.label}</span>
+        <span className="bait-status">{meta.label === "in pool" ? `${k.kid.slice(0, 5)}…` : meta.label}</span>
       </>
     );
     const cls = `bait-slot ${meta.cls}${dismissible ? " dismissible" : ""}`;
@@ -121,12 +121,5 @@ export function BaitLine({ onOpen }: { onOpen?: (bottleId: string) => void }) {
   });
 
   if (!visible.length) return null;
-  return (
-    <div className="mb-2">
-      <div className="text-[12px] italic text-neutral-600">
-        your bait line — 🎣 waiting · 😋 just eaten · 🫥 lost? · ❗ unread catch · tap 😋 to open catch
-      </div>
-      <div className="bait-line bevel-in">{visible.map(slot)}</div>
-    </div>
-  );
+  return <div className="bait-line bevel-in">{visible.map(slot)}{extra}</div>;
 }

@@ -242,31 +242,34 @@ hr.retro-hr {
 /* bait line — your deposited keys as lures waiting for bites */
 .bait-line {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   overflow-x: auto;
-  padding: 8px 4px;
-  min-height: 76px;
+  padding: 6px 4px;
+  min-height: 52px;
   align-items: flex-end;
 }
 .bait-slot {
   position: relative;
   flex: 0 0 auto;
-  width: 72px;
-  padding: 6px 4px 4px;
-  text-align: center;
+  width: 46px;
+  aspect-ratio: 1;
+  padding: 3px 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
   border: 1px solid #999;
   background: #fdf6e3;
-  font-size: 11px;
+  font-size: 9px;
 }
 .bait-slot .bait-emoji {
-  font-size: 22px;
+  font-size: 16px;
   line-height: 1.1;
   display: block;
 }
 .bait-slot .bait-kid {
-  font-family: monospace;
-  color: #666;
-  font-size: 10px;
+  display: none;
 }
 .bait-slot.pending {
   border-style: dashed;
@@ -298,14 +301,14 @@ hr.retro-hr {
 }
 .bait-unread-dot {
   position: absolute;
-  top: -5px;
-  right: -5px;
-  width: 14px;
-  height: 14px;
+  top: 1px;
+  right: 1px;
+  width: 11px;
+  height: 11px;
   border-radius: 50%;
   background: #c0392b;
   color: #fff;
-  font-size: 10px;
+  font-size: 8px;
   font-weight: bold;
   display: flex;
   align-items: center;
@@ -318,7 +321,7 @@ hr.retro-hr {
 }
 .bait-slot .bait-status {
   display: block;
-  font-size: 9px;
+  font-size: 8px;
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -407,4 +410,14 @@ button.bait-slot {
 }
 .app-menu .retro-tool .retro-tool-icon {
   font-size: 15px;
+}
+
+/* "+ new" bait slot — light blue echoing the titlebar gradient end */
+.bait-slot.bait-new {
+  background: #cfe4fb;
+  border-color: #4a86c8;
+  color: #14406e;
+}
+.bait-slot.bait-new .bait-status {
+  color: #14406e;
 }

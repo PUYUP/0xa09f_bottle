@@ -3,7 +3,7 @@ import { useApp } from "./hooks/useApp";
 import { AccountPanel, BlocksCard, DeviceCard, DevicesCard, MyKeysPanel, PoolPanel, StatsCard, SubscriptionCard, VaultButtons } from "./components/Panels";
 import { FlatThread, findNode } from "./components/Thread";
 import { BaitLine } from "./components/BaitLine";
-import { BOTTLE_QUOTA, MAX_LOCAL_KEYS } from "./lib/crypto";
+import { BOTTLE_QUOTA, MAX_LOCAL_KEYS, MAX_THREAD_DEPTH } from "./lib/crypto";
 import {
   buildThreads,
   checkBottles,
@@ -17,6 +17,7 @@ import {
   logout,
   openThread,
   readTTLSeconds,
+  replyBottle,
   importVaultFile,
   exportVault,
   vaultReminderState,
@@ -227,6 +228,7 @@ function Paywall({ ent, onChanged }: { ent: Entitlement; onChanged: (ent: Entitl
 export default function App() {
   const state = useApp();
   const [message, setMessage] = useState("");
+  const [replyDraft, setReplyDraft] = useState("");
   const [baitTtl, setBaitTtl] = useState("86400");
   const [baitDialog, setBaitDialog] = useState(false);
   const [legal, setLegal] = useState<DocKind | null>(null);
@@ -378,9 +380,43 @@ export default function App() {
       .finally(() => setThreadLoads((n) => Math.max(0, n - 1)));
   };
 
+// lastReplyable finds the newest message in a thread we can reply to —
+// same rule as mobile: not ours, not deleted, carries a reply key, and
+// the thread hasn't hit max depth.
+function collectNodes(node: ThreadNode, out: ThreadNode[] = []): ThreadNode[] {
+  out.push(node);
+  for (const c of node.children) collectNodes(c, out);
+  return out;
+}
+
+function lastReplyable(root: ThreadNode): ThreadNode | null {
+  const nodes = collectNodes(root);
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    const r = nodes[i].rec;
+    if (
+      r.claim?.status !== "SENT" &&
+      !r.deleted &&
+      !!r.plain?.reply &&
+      (r.bottle?.depth || 1) < MAX_THREAD_DEPTH
+    )
+      return nodes[i];
+  }
+  return null;
+}
+
   const detailNode = detailPath.length
     ? findNode(threads, detailPath[detailPath.length - 1])
     : null;
+
+  const replyTarget = detailNode ? lastReplyable(detailNode) : null;
+  const sendReply = () => {
+    const t = replyDraft.trim();
+    if (!t || !replyTarget) return;
+    setReplyDraft("");
+    run(async () => {
+      await replyBottle(replyTarget.rec, t);
+    });
+  };
 
   return (
     <main className="flex h-screen flex-col gap-2 overflow-hidden p-2">
@@ -417,15 +453,6 @@ export default function App() {
           </span>
         </div>
         <div className="app-menu flex flex-wrap items-center justify-end gap-1">
-          <button
-            className="retro-tool"
-            disabled={busy}
-            onClick={openBaitDialog}
-            title="generate a keypair and publish the public half to the bait pool"
-          >
-            <span className="retro-tool-icon">🎣</span>
-            <span>throw bait</span>
-          </button>
           <button
             className="retro-tool"
             disabled={busy}
@@ -475,6 +502,9 @@ export default function App() {
           e2ee: <b className="text-green-700">on</b>
         </span>
         {state.syncing && <span className="text-amber-700">⟳ syncing messages…</span>}
+        <span className="ml-auto text-[11px] italic text-neutral-900">
+          🎣 waiting · 😋 eaten · 🫥 lost · ❗ unread
+        </span>
       </div>
 
       {billing?.status === "trialing" && billing.daysLeft <= 7 && billing.entitled && (
@@ -551,6 +581,76 @@ export default function App() {
         </div>
       )}
 
+      {/* ── composer + bait line cards above the workspace ── */}
+      <div className="flex flex-wrap gap-2">
+      <div className="bevel min-w-[18rem] flex-1">
+        <div className="retro-titlebar">
+          <span>🎣 cast into the sea</span>
+            <span className="text-[12px]">sealed with AES-256-GCM</span>
+          </div>
+          <div className="bg-[#c0c0c0] p-2">
+            <div className="flex gap-2">
+              <textarea
+                className="retro-input retro-msg w-full resize-none"
+                rows={2}
+                placeholder="write something for the sea…"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    run(async () => {
+                      await dropBottle(message, "86400");
+                      setMessage("");
+                    });
+                  }
+                }}
+              />
+              <button
+                className="retro-btn retro-cast"
+                disabled={busy}
+                onClick={() =>
+                  run(async () => {
+                    await dropBottle(message, "86400");
+                    setMessage("");
+                  })
+                }
+              >
+                🎣<br />
+                cast it
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* bait line card — right of composer, wraps below on narrow screens */}
+        <div className="bevel w-64 shrink-0">
+          <div className="retro-titlebar">
+            <span>🎣 your bait line</span>
+          </div>
+          <div className="retro-body">
+            <BaitLine
+              onOpen={(bottleId) => {
+                setPage("catch");
+                loadThread(bottleId);
+                setDetailPath([bottleId]);
+              }}
+              extra={
+                <button
+                  type="button"
+                  className="bait-slot bait-new"
+                  title="throw more bait — publish a fresh keypair into the pool"
+                  onClick={openBaitDialog}
+                >
+                  <span className="bait-emoji">🎣</span>
+                  <span className="bait-status">+ new</span>
+                </button>
+              }
+            />
+          </div>
+        </div>
+      </div>
+
       {/* ── workspace: thread sidebar + chat pane ──────────── */}
       <div className="flex min-h-0 flex-1 gap-2">
         {/* left: thread list */}
@@ -568,14 +668,8 @@ export default function App() {
               🔄
             </button>
           </div>
+
           <div className="retro-body flex-1 overflow-y-auto">
-            <BaitLine
-              onOpen={(bottleId) => {
-                setPage("catch");
-                loadThread(bottleId);
-                setDetailPath([bottleId]);
-              }}
-            />
             {page === "catch" && (
               <>
                 {threads.length === 0 && (
@@ -749,6 +843,7 @@ export default function App() {
               {threadLoads > 0 && <span className="text-neutral-600">⏳ loading…</span>}
             </span>
           </div>
+
           <div className="retro-body flex-1 overflow-y-auto">
             {page === "bait" && <MyKeysPanel onClose={() => setPage("catch")} />}
             {page === "pool" && <PoolPanel onClose={() => setPage("catch")} />}
@@ -834,46 +929,45 @@ export default function App() {
               </>
             )}
           </div>
-          {/* composer — pinned to the bottom of the chat pane */}
-          <div className="shrink-0 border-t-2 border-[#808080]">
-            <div className="retro-titlebar">
-              <span>🎣 cast into the sea</span>
-              <span className="text-[12px]">sealed with AES-256-GCM</span>
-            </div>
-            <div className="bg-[#c0c0c0] p-2">
-              <div className="flex gap-2">
-                <textarea
-                  className="retro-input retro-msg w-full resize-none"
-                  rows={2}
-                  placeholder="write something for the sea…"
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                      e.preventDefault();
-                      run(async () => {
-                        await dropBottle(message, "86400");
-                        setMessage("");
-                      });
+          {/* reply bar — only while a thread is open */}
+          {page === "catch" && detailNode && (
+            <div className="shrink-0 border-t-2 border-[#808080]">
+              <div className="retro-titlebar">
+                <span>💬 reply</span>
+                <span className="text-[12px]">to #{(detailNode.rec.bottle?.id || "").slice(0, 8)}</span>
+              </div>
+              <div className="bg-[#c0c0c0] p-2">
+                <div className="flex gap-2">
+                  <textarea
+                    className="retro-input retro-msg w-full resize-none"
+                    rows={2}
+                    placeholder={
+                      replyTarget
+                        ? "write a reply… (ctrl+enter)"
+                        : "no one to reply to yet"
                     }
-                  }}
-                />
-                <button
-                  className="retro-btn retro-cast"
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      await dropBottle(message, "86400");
-                      setMessage("");
-                    })
-                  }
-                >
-                  🎣<br />
-                  cast it
-                </button>
+                    value={replyDraft}
+                    disabled={!replyTarget}
+                    onChange={(e) => setReplyDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                        e.preventDefault();
+                        sendReply();
+                      }
+                    }}
+                  />
+                  <button
+                    className="retro-btn"
+                    disabled={busy || !replyTarget}
+                    onClick={sendReply}
+                  >
+                    ↩<br />
+                    reply
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </section>
       </div>
 
