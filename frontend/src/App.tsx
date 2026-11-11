@@ -421,6 +421,12 @@ function collectNodes(node: ThreadNode, out: ThreadNode[] = []): ThreadNode[] {
   return out;
 }
 
+function scrollToMsg(bottleId: string) {
+  document
+    .getElementById(`msg-${bottleId}`)
+    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
 function lastReplyable(root: ThreadNode): ThreadNode | null {
   const nodes = collectNodes(root);
   for (let i = nodes.length - 1; i >= 0; i--) {
@@ -1011,7 +1017,18 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             <div className="shrink-0 border-t-2 border-[#808080]">
               <div className="retro-titlebar">
                 <span>💬 reply</span>
-                <span className="text-[12px]">to #{(detailNode.rec.bottle?.id || "").slice(0, 8)}</span>
+                <span className="flex items-center gap-2 text-[12px]">
+                  to #{(detailNode.rec.bottle?.id || "").slice(0, 8)}
+                  {replyTarget?.rec.bottle?.parentId && (
+                    <button
+                      className="underline decoration-dotted underline-offset-2 hover:text-white"
+                      title={`jump to parent #${replyTarget.rec.bottle.parentId.slice(0, 8)}`}
+                      onClick={() => scrollToMsg(replyTarget.rec.bottle!.parentId!)}
+                    >
+                      ↩ reply to #{replyTarget.rec.bottle.parentId.slice(0, 8)}
+                    </button>
+                  )}
+                </span>
               </div>
               <div className="bg-[#c0c0c0] p-2">
                 <div className="flex gap-2">

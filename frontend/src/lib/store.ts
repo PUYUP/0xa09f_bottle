@@ -565,9 +565,28 @@ export async function replyBottle(parent: ThreadRecord, text: string) {
   const selfEnv = await wrapSessionKey(bottleId, identity.publicJwk, rawSessionKey, selfKid);
   selfEnv.kid = selfKid;
   // rootId = the thread's first message id: inherit the parent's rootId,
-  // or use the parent's own id when replying to a root (or a legacy reply
-  // that predates the field).
-  const rootId = bottle.rootId || bottle.id;
+  // or use the parent's own id when replying to a root. Legacy replies
+  // that predate the field have parentId but no rootId — walk the ancestor
+  // chain so the reply doesn't start a phantom new thread.
+  let rootId = bottle.rootId || bottle.id;
+  if (!bottle.rootId && bottle.parentId) {
+    const all = await idbGetAll<ThreadRecord>(META_STORE).catch(() => [] as ThreadRecord[]);
+    const byBottleId = new Map(all.map((r) => [r.bottle?.id, r]));
+    const seen = new Set<string>([bottle.id]);
+    let cur = byBottleId.get(bottle.parentId);
+    while (cur?.bottle && !seen.has(cur.bottle.id)) {
+      seen.add(cur.bottle.id);
+      if (cur.bottle.rootId) {
+        rootId = cur.bottle.rootId;
+        break;
+      }
+      if (!cur.bottle.parentId) {
+        rootId = cur.bottle.id;
+        break;
+      }
+      cur = byBottleId.get(cur.bottle.parentId);
+    }
+  }
   // Optimistic: show the reply immediately; the POST reconciles in the
   // background and removes the local record if the server rejects it.
   await storeSentRecord(bottleId, {
