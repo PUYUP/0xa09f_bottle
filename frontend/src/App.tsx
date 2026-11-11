@@ -230,6 +230,7 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [replyDraft, setReplyDraft] = useState("");
   const [logOpen, setLogOpen] = useState(false);
+  const [baitOpen, setBaitOpen] = useState(false);
   const [baitTtl, setBaitTtl] = useState("86400");
   const [baitDialog, setBaitDialog] = useState(false);
   const [legal, setLegal] = useState<DocKind | null>(null);
@@ -427,6 +428,9 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
   const detailNode = detailPath.length
     ? findNode(threads, detailPath[detailPath.length - 1])
     : null;
+  const activeBaits = state.keys.filter(
+    (k) => state.ownPoolKids.has(k.kid) || k.status === "active"
+  ).length;
 
   const replyTarget = detailNode ? lastReplyable(detailNode) : null;
   const sendReply = () => {
@@ -437,6 +441,12 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
       await replyBottle(replyTarget.rec, t);
     });
   };
+
+  // Auto-expand the baits card while a server sync is in flight so the
+  // user sees live status instead of a collapsed strip.
+  useEffect(() => {
+    if (state.syncing) setBaitOpen(true);
+  }, [state.syncing]);
 
   return (
     <main className="flex h-screen flex-col gap-2 overflow-hidden p-2">
@@ -654,9 +664,29 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         {/* bait line card — right of composer, wraps below on narrow screens */}
         <div className="bevel w-full shrink-0 md:w-fit md:max-w-[30rem]">
           <div className="retro-titlebar">
-            <span>🎣 your baits</span>
+            <span style={{ color: "#ffd75e" }}>
+              🎣 {activeBaits} bait{activeBaits === 1 ? "" : "s"} active
+            </span>
+            <span className="flex items-center gap-1 text-[12px]">
+              <button
+                className="retro-btn retro-btn-sm md:hidden"
+                onClick={() => {
+                  setBaitOpen(true);
+                  openBaitDialog();
+                }}
+                title="throw more bait"
+              >
+                + add
+              </button>
+              <button
+                className="retro-btn retro-btn-sm md:hidden"
+                onClick={() => setBaitOpen((v) => !v)}
+              >
+                {baitOpen ? "hide" : "show"}
+              </button>
+            </span>
           </div>
-          <div className="retro-body">
+          <div className={`retro-body ${baitOpen ? "block" : "hidden"} md:block`}>
             <div className="mb-1 text-[11px] italic text-neutral-700">
               🎣 waiting · 😋 eaten · 🫥 lost · ❗ unread
             </div>
