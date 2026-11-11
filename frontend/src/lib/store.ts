@@ -2410,6 +2410,10 @@ export async function init() {
   }
   setState({ ready: true });
   checkBottles().catch((e) => log(`auto-check: ${(e as Error).message}`, "err"));
+  // Subscribe immediately — without this the first SSE connection only
+  // happens on the first send or the 60s ticker, so inbound bottles in the
+  // first minute after login never push an event.
+  connectEvents().catch(() => {});
   // Re-subscribe periodically so the kid filter picks up newly known
   // threads and rotated pool keys even if the tab stays open for days.
   setInterval(() => connectEvents().catch(() => {}), 60000);
