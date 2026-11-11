@@ -608,7 +608,8 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         </div>
       )}
 
-      {/* ── composer + bait line cards above the workspace ── */}
+      {/* ── composer + bait line cards — home (thread list) only ── */}
+      {page === "catch" && !detailNode && (
       <div className="flex flex-wrap gap-2">
       <div className="bevel flex min-w-[18rem] flex-1 flex-col">
         <div className="retro-titlebar">
@@ -680,6 +681,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
           </div>
         </div>
       </div>
+      )}
 
       {/* ── workspace: thread sidebar + chat pane ──────────── */}
       <div className="flex min-h-0 flex-1 gap-2">
