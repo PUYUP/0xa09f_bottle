@@ -14,7 +14,6 @@ import {
   getServerOffsetSec,
   init,
   log,
-  logout,
   openThread,
   readTTLSeconds,
   replyBottle,
@@ -463,23 +462,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             you are:{" "}
             <b>{identity?.username ? `@${identity.username}` : "anonymous drifter"}</b>
             {!state.ready && <span className="text-neutral-600"> · booting…</span>}
-            {identity?.username && (
-              <button
-                className="retro-link ml-2"
-                title="switch to a different identity — keys & messages are wiped locally; your account stays claimable via secret key"
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      "switch identity? this wipes keys and messages on this device — export your secret key first if you want to keep them."
-                    )
-                  )
-                    return;
-                  logout().catch((e) => log(`logout: ${(e as Error).message}`, "err"));
-                }}
-              >
-                switch identity
-              </button>
-            )}
+
           </span>
         </div>
         <div className="app-menu flex flex-nowrap items-center justify-end gap-1">

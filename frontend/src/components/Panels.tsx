@@ -15,6 +15,7 @@ import {
   getClientMeta,
   importVaultFile,
   log,
+  logout,
   refreshActivePoolKeys,
   refreshBlocks,
   refreshPoolKeys,
@@ -334,6 +335,25 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
             />
           </div>
         </div>
+        {identity?.username && (
+          <div className="border-t border-neutral-300 pt-2">
+            <button
+              className="retro-btn"
+              title="wipe keys & messages on this device and sign in as someone else — your account stays claimable via secret key"
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "switch identity? this wipes keys and messages on this device — export your secret key first if you want to keep them."
+                  )
+                )
+                  return;
+                logout().catch((e) => log(`logout: ${(e as Error).message}`, "err"));
+              }}
+            >
+              ⇄ switch identity
+            </button>
+          </div>
+        )}
         {identity?.username && (
           <div className="border-t border-neutral-300 pt-2">
             <p className="mb-1 text-[13px] text-neutral-600">
