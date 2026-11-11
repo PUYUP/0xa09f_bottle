@@ -311,6 +311,25 @@ export default function App() {
     return () => clearInterval(timer);
   }, [detailPath, state.records]);
 
+  // Opening a thread lands on the newest message — the pane is a
+  // scroll container, so pin it to the bottom once content renders.
+  useEffect(() => {
+    if (!detailPath.length) return;
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      const el = document.getElementById("chat-pane");
+      if (el && el.scrollHeight > el.clientHeight + 40) {
+        el.scrollTop = el.scrollHeight;
+        clearInterval(timer);
+      } else if (tries > 50) {
+        clearInterval(timer);
+      }
+    }, 100);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailPath.join("/")]);
+
   useEffect(() => {
     let alive = true;
     buildThreads()
@@ -871,7 +890,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
           </div>
           )}
 
-          <div className="retro-body flex-1 overflow-y-auto">
+          <div id="chat-pane" className="retro-body flex-1 overflow-y-auto">
             {page === "bait" && <MyKeysPanel onClose={() => setPage("catch")} />}
             {page === "pool" && <PoolPanel onClose={() => setPage("catch")} />}
             {page === "account" && (
