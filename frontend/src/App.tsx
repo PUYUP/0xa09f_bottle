@@ -624,7 +624,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         </div>
 
         {/* bait line card — right of composer, wraps below on narrow screens */}
-        <div className="bevel w-64 shrink-0">
+        <div className="bevel w-full shrink-0 md:w-64">
           <div className="retro-titlebar">
             <span>🎣 your bait line</span>
           </div>
@@ -654,7 +654,11 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
       {/* ── workspace: thread sidebar + chat pane ──────────── */}
       <div className="flex min-h-0 flex-1 gap-2">
         {/* left: thread list */}
-        <aside className="bevel flex w-[20rem] shrink-0 flex-col">
+        <aside
+          className={`bevel w-full shrink-0 flex-col md:w-[20rem] ${
+            page === "catch" && !detailNode ? "flex" : "hidden"
+          } md:flex`}
+        >
           <div className="retro-titlebar">
             <span>
               📥 catch — {threads.length} message{threads.length === 1 ? "" : "s"}
@@ -820,7 +824,11 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         </aside>
 
         {/* right: chat detail / panels */}
-        <section className="bevel flex min-w-0 flex-1 flex-col">
+        <section
+          className={`bevel min-w-0 flex-1 flex-col ${
+            page === "catch" && !detailNode ? "hidden" : "flex"
+          } md:flex`}
+        >
           <div className="retro-titlebar">
             <span className="truncate">
               {detailNode
@@ -835,7 +843,13 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             </span>
             <span className="flex items-center gap-2 text-[13px]">
               {detailNode && (
-                <span className="retro-link" onClick={() => setDetailPath([])}>← back</span>
+                <button
+                  className="retro-btn retro-btn-sm"
+                  onClick={() => setDetailPath([])}
+                  title="back to all messages"
+                >
+                  ← back
+                </button>
               )}
               {page !== "catch" && (
                 <span className="retro-link" onClick={() => setPage("catch")}>✕ close</span>
