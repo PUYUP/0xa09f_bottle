@@ -873,6 +873,11 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
           <div className="retro-titlebar">
             <span className="truncate">
               {detailNode ? `#${(detailNode.rec.bottle?.id || "").slice(0, 8)}` : ""}
+              {detailNode && threadLoads > 0 && (
+                <span className="ml-2 text-[11px] font-normal text-amber-500">
+                  ⏳ loading…
+                </span>
+              )}
             </span>
             <span className="flex items-center gap-2 text-[13px]">
               {detailNode && (
@@ -887,7 +892,6 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
               {page !== "catch" && (
                 <span className="retro-link" onClick={() => setPage("catch")}>✕ close</span>
               )}
-              {threadLoads > 0 && <span className="text-neutral-600">⏳ loading…</span>}
             </span>
           </div>
           )}
