@@ -395,6 +395,9 @@ export async function depositUndeposited(ttlRaw: string): Promise<number> {
   // Refresh the browsable pool list so a just-deposited key shows up
   // without a page reload.
   refreshPoolKeys(0).catch(() => {});
+  // New bait kids change the SSE kid set — resubscribe now or inbound
+  // bottles to these keys won't push events until the next trigger.
+  connectEvents().catch(() => {});
   return pending.length;
 }
 
