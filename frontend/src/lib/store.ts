@@ -1499,7 +1499,13 @@ async function evictMetaOverflow() {
 // Server pushes `event: bottle` when a new bottle matches our kid filter;
 // we debounce and run a normal scan — crypto path stays identical to polling.
 let eventsSource: EventSource | null = null;
-let eventsUrl = "";
+// eventsKidsKey tracks the kid set of the LIVE subscription — the server
+// fixes it at subscribe time, so a new token with the same kids does not
+// need a reconnect. lastSseOpenAt forces a refresh before token expiry
+// (~600s) so a dropped stream can't zombie-retry on a dead token.
+let eventsKidsKey = "";
+let lastSseOpenAt = 0;
+let eventsPending = false;
 let scanTimer: ReturnType<typeof setTimeout> | null = null;
 
 function scheduleCatchScan() {
@@ -1532,55 +1538,73 @@ function scheduleThreadFetch(rootId: string) {
 }
 
 export async function connectEvents() {
+  if (eventsPending) return;
   const kidsParam = await eventKidsParam();
-  const token = kidsParam ? await popTokenFor(kidsParam.split(",")).catch(() => null) : null;
-  const url = token ? `${API_BASE}/api/events?token=${encodeURIComponent(token)}` : "";
-  if (!url) {
-    eventsSource?.close();
-    eventsSource = null;
-    eventsUrl = "";
-    return;
-  }
-  if (url === eventsUrl && eventsSource) return;
-  eventsSource?.close();
-  eventsUrl = url;
-  console.log("[sse] subscribing, kids:", kidsParam.split(",").length);
+  const kidsKey = kidsParam ? [...kidsParam.split(",")].sort().join(",") : "";
+  const alive = !!eventsSource && eventsSource.readyState !== EventSource.CLOSED;
+  // Same kid set + healthy connection + token not near expiry → nothing
+  // to do. This is what keeps routine connectEvents calls (post-send,
+  // 60s ticker) from churning the subscription.
+  if (kidsKey === eventsKidsKey && alive && Date.now() - lastSseOpenAt < 540_000) return;
+  eventsPending = true;
   try {
-    eventsSource = new EventSource(url);
-    eventsSource.onopen = () => console.log("[sse] connected");
-    eventsSource.addEventListener("bottle", (ev) => {
-      // Payload is {"id":..., "deleted":bool}; deletions mark local
-      // records as placeholders instead of waiting for a scan that may
-      // never surface the tombstone incrementally.
-      try {
-        const data = JSON.parse((ev as MessageEvent).data || "{}") as {
-          id?: string;
-          deleted?: boolean;
-          parentId?: string;
-          rootId?: string;
-        };
-        if (data.deleted && data.id) {
-          void markBottleDeleted(data.id);
-          return;
+    const token = kidsParam ? await popTokenFor(kidsParam.split(",")).catch(() => null) : null;
+    const url = token ? `${API_BASE}/api/events?token=${encodeURIComponent(token)}` : "";
+    if (!url) {
+      eventsSource?.close();
+      eventsSource = null;
+      eventsKidsKey = "";
+      return;
+    }
+    console.log("[sse] subscribing, kids:", kidsParam.split(",").length);
+    // Overlap: the previous stream stays subscribed until the new one
+    // actually opens, so publishes never hit a zero-subscriber gap.
+    const prev = eventsSource;
+    try {
+      const es = new EventSource(url);
+      eventsSource = es;
+      es.onopen = () => {
+        lastSseOpenAt = Date.now();
+        eventsKidsKey = kidsKey;
+        prev?.close();
+        console.log("[sse] connected");
+      };
+      es.addEventListener("bottle", (ev) => {
+        // Payload is {"id","deleted","parentId","rootId"}; deletions mark
+        // local records as placeholders instead of waiting for a scan
+        // that may never surface the tombstone incrementally.
+        try {
+          const data = JSON.parse((ev as MessageEvent).data || "{}") as {
+            id?: string;
+            deleted?: boolean;
+            parentId?: string;
+            rootId?: string;
+          };
+          if (data.deleted && data.id) {
+            void markBottleDeleted(data.id);
+            return;
+          }
+          console.log("[sse] bottle event", data.id?.slice(0, 8));
+          if (data.id) {
+            // Replies carry rootId; a root bottle's own id is the thread
+            // root. Either way fetch that thread directly — an open chat
+            // updates without waiting for the stats poll.
+            const root = data.rootId || (!data.parentId ? data.id : "");
+            if (root) scheduleThreadFetch(root);
+          }
+        } catch {
+          // fall through to scan
         }
-        console.log("[sse] bottle event", data.id?.slice(0, 8));
-        if (data.id) {
-          // Replies carry rootId; a root bottle's own id is the thread
-          // root. Either way fetch that thread directly — an open chat
-          // updates without waiting for the stats poll.
-          const root = data.rootId || (!data.parentId ? data.id : "");
-          if (root) scheduleThreadFetch(root);
-        }
-      } catch {
-        // fall through to scan
-      }
-      setState({ lastCatchAt: Date.now() });
-      scheduleCatchScan();
-      scheduleActivityRefresh();
-    });
-    eventsSource.onerror = () => console.log("[sse] connection error — will retry");
-  } catch {
-    eventsSource = null;
+        setState({ lastCatchAt: Date.now() });
+        scheduleCatchScan();
+        scheduleActivityRefresh();
+      });
+      es.onerror = () => console.log("[sse] connection error — will retry");
+    } catch {
+      eventsSource = null;
+    }
+  } finally {
+    eventsPending = false;
   }
 }
 

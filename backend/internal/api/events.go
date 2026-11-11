@@ -106,7 +106,6 @@ func (s *Server) streamEvents(c fiber.Ctx) error {
 		kids[k] = struct{}{}
 	}
 	sub := s.events.subscribe(kids)
-	defer s.events.unsubscribe(sub)
 	log.Printf("sse subscribe kids=%d totalSubs=%d", len(kids), s.events.subCount())
 
 	c.Set("Content-Type", "text/event-stream")
@@ -114,7 +113,13 @@ func (s *Server) streamEvents(c fiber.Ctx) error {
 	c.Set("Connection", "keep-alive")
 	c.Set("X-Accel-Buffering", "no")
 
+	// SendStreamWriter does NOT block: the handler returns as soon as the
+	// writer is registered, so an unsubscribe deferred here would drop the
+	// subscriber milliseconds after subscribing (the stream itself keeps
+	// running inside fasthttp). Unsubscribe inside the writer instead —
+	// it runs when the stream actually ends.
 	return c.SendStreamWriter(func(w *bufio.Writer) {
+		defer s.events.unsubscribe(sub)
 		fmt.Fprint(w, "retry: 3000\n\n")
 		w.Flush()
 		ticker := time.NewTicker(25 * time.Second)
