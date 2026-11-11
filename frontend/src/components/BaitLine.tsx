@@ -120,6 +120,6 @@ export function BaitLine({ onOpen, extra }: { onOpen?: (bottleId: string) => voi
     return s === "active" || s === "pending";
   });
 
-  if (!visible.length) return null;
+  if (!visible.length && !extra) return null;
   return <div className="bait-line bevel-in">{visible.map(slot)}{extra}</div>;
 }
