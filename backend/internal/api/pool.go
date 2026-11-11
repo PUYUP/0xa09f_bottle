@@ -280,6 +280,23 @@ func (s *Server) rebuildPool(ctx context.Context) {
 	log.Printf("pool rebuild: restored %d/%d live key(s) from registry", n, len(keys))
 }
 
+// releaseMyKeys pulls every unconsumed pool key owned by the caller off
+// the water — the explicit-logout path so bait doesn't linger in the pool
+// (unreadable to anyone) after the owning device signs out. Requires
+// identity auth; only the caller's own keys are touched.
+func (s *Server) releaseMyKeys(c fiber.Ctx) error {
+	user, ok := s.authUser(c)
+	if !ok || s.pg == nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "auth required")
+	}
+	n, err := s.pg.ReleaseUserPoolKeys(c.Context(), user.ID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "release failed")
+	}
+	s.cacheInvalidatePool(c.Context())
+	return c.JSON(fiber.Map{"released": n})
+}
+
 func (s *Server) listPoolKids(c fiber.Ctx) error {
 	limit := 20000
 	if raw := c.Query("limit"); raw != "" {

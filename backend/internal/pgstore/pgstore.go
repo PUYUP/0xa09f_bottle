@@ -412,6 +412,20 @@ ON CONFLICT (kid) DO UPDATE SET
 	return err
 }
 
+// ReleaseUserPoolKeys expires every unconsumed pool key owned by owner —
+// the explicit-logout path, so bait doesn't sit in the pool until TTL
+// after the device that owns it is gone. Returns rows released.
+func (p *PGStore) ReleaseUserPoolKeys(ctx context.Context, owner string) (int64, error) {
+	res, err := p.pool.Exec(ctx, `
+UPDATE key_registry SET expires_at = $2
+WHERE owner = $1 AND consumed_at = 0 AND expires_at > $2`,
+		owner, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected(), nil
+}
+
 // MarkPoolKeysConsumed records that pool keys were handed out by a fetch.
 // Best-effort bookkeeping for pool rebuilds; fetch itself never depends on it.
 func (p *PGStore) MarkPoolKeysConsumed(ctx context.Context, kids []string) error {

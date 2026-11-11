@@ -78,6 +78,16 @@ export function CatchPage() {
         </IonToolbar>
       </IonHeader>
       <IonContent className="ion-padding">
+        {state.syncing && (
+          <IonItem
+            lines="full"
+            className="ion-margin-top"
+            style={{ "--background": "#e8f0fe", "--color": "#333" } as React.CSSProperties}
+          >
+            <IonSpinner name="crescent" style={{ width: 18, height: 18 }} />
+            <IonLabel className="ion-padding-start">syncing your messages…</IonLabel>
+          </IonItem>
+        )}
         {vaultDue && (
           <IonItem
             lines="full"

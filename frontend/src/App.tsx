@@ -422,6 +422,7 @@ export default function App() {
           🎣 bait in pool: <b>{state.activePoolKeys ?? "…"}</b>/{MAX_LOCAL_KEYS} · casts:{" "}
           <b>{BOTTLE_QUOTA}</b>/day · e2ee:{" "}
           <b className="text-green-700">on</b>
+          {state.syncing && <span className="ml-2 text-amber-700">⟳ syncing messages…</span>}
         </span>
       </div>
 

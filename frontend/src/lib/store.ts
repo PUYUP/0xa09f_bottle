@@ -53,6 +53,9 @@ export interface AppState {
   // unix ms of the most recent SSE bottle event — drives the "something
   // bit" toast. 0 until the first event this session.
   lastCatchAt: number;
+  // true while a post-import content sync (inbox scan + thread activity)
+  // is pulling server-side messages down — drives the loading indicator.
+  syncing: boolean;
 }
 
 let state: AppState = {
@@ -66,6 +69,7 @@ let state: AppState = {
   records: [],
   logs: [],
   lastCatchAt: 0,
+  syncing: false,
 };
 
 const listeners = new Set<() => void>();
@@ -2019,7 +2023,26 @@ export async function importVaultFile(file: File) {
   await restoreIdentityProfile();
   await loadKeys();
   await hydrateKeyMetadata();
+  // The owner demonstrably returned — they hold the private keys. Re-cast
+  // anything the pool no longer holds (released on logout, or TTL-expired)
+  // so imported bait doesn't sit dry on the shore.
+  await depositUndeposited("86400").catch(() => {});
   await renderInbox();
+  // A v4 secret key carries key material only — messages live on the
+  // server. Pull them now: inbox scan recreates sent:/caught: records,
+  // then the activity pass fetches+decrypts thread replies. Without this
+  // an in-app import leaves the inbox empty until a manual refresh.
+  setState({ syncing: true });
+  void (async () => {
+    try {
+      await checkBottles();
+      await refreshThreadActivity(true);
+    } catch {
+      // partial sync is fine — SSE/manual refresh catches the rest
+    } finally {
+      setState({ syncing: false });
+    }
+  })();
   log(`imported secret key with ${restored} key(s) restored`);
   return restored;
 }
@@ -2310,6 +2333,13 @@ export async function logout() {
   eventsSource?.close();
   eventsSource = null;
   eventsKidsKey = "";
+  // Pull our bait off the water before the local wipe — otherwise pool
+  // keys sit until TTL with nobody able to decrypt their catches.
+  try {
+    await api("/api/pool/mine", { method: "DELETE" });
+  } catch {
+    // offline/unauthenticated — TTL still reaps the keys eventually
+  }
   await idbClear(KEY_STORE);
   await idbClear(META_STORE);
   await idbClear(KV_STORE);
