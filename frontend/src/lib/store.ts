@@ -1858,12 +1858,12 @@ export async function exportVault() {
     log("no local keys to export", "warn");
     return;
   }
-  const passphrase = window.prompt("vault passphrase");
+  const passphrase = window.prompt("secret key passphrase");
   if (!passphrase) return;
   const encrypted = await encryptVault(JSON.stringify(payload), passphrase);
   downloadJson("a09f-identity.json", encrypted);
   await idbPut(KV_STORE, { id: "vault:lastExport", ts: Date.now() }).catch(() => {});
-  log(`exported encrypted vault with ${payload.keys.length} pool key(s)`);
+  log(`exported encrypted secret key with ${payload.keys.length} pool key(s)`);
 }
 
 // Vault backup reminder: without an export, losing the device means losing
@@ -1927,7 +1927,7 @@ async function restoreIdentityProfile() {
 }
 
 export async function importVaultFile(file: File) {
-  const passphrase = window.prompt("vault passphrase");
+  const passphrase = window.prompt("secret key passphrase");
   if (!passphrase) return;
   const text = await file.text();
   const blob = JSON.parse(text) as Parameters<typeof decryptVault>[0];
@@ -2020,7 +2020,7 @@ export async function importVaultFile(file: File) {
   await loadKeys();
   await hydrateKeyMetadata();
   await renderInbox();
-  log(`imported vault with ${restored} key(s) restored`);
+  log(`imported secret key with ${restored} key(s) restored`);
   return restored;
 }
 

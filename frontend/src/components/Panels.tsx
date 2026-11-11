@@ -595,15 +595,15 @@ export function VaultButtons() {
     <>
       <button
         className="retro-tool"
-        title="export encrypted vault (private keys only)"
+        title="export encrypted secret key (private keys only)"
         onClick={() => exportVault().catch((e) => log(`export: ${(e as Error).message}`, "err"))}
       >
         <span className="retro-tool-icon">🔐</span>
-        <span>export vault</span>
+        <span>export secret key</span>
       </button>
-      <button className="retro-tool" title="import vault on a new device" onClick={() => fileRef.current?.click()}>
+      <button className="retro-tool" title="import secret key on a new device" onClick={() => fileRef.current?.click()}>
         <span className="retro-tool-icon">📂</span>
-        <span>import vault</span>
+        <span>import secret key</span>
       </button>
       <input
         ref={fileRef}

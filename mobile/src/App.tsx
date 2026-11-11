@@ -154,7 +154,7 @@ export default function App() {
             </IonButton>
             <div className="ion-margin-top" style={{ borderTop: "1px solid var(--ion-color-light)", paddingTop: 12 }}>
               <p style={{ color: "var(--ion-color-medium)", fontSize: 13 }}>
-                coming back on a new device? your vault export holds the
+                coming back on a new device? your secret key export holds the
                 private keys that prove this identity — import it to restore
                 your username, bait and message history.
               </p>
@@ -165,7 +165,7 @@ export default function App() {
                 onClick={() => gateFileRef.current?.click()}
               >
                 <IonIcon icon={cloudDownload} slot="start" />
-                import vault / secret file
+                import secret key file
               </IonButton>
               <input
                 ref={gateFileRef}

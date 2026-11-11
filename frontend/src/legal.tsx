@@ -38,14 +38,14 @@ export function TermsContent() {
       <h3>4. Your keys, your responsibility</h3>
       <p>
         Private keys live only on your device. If you lose them — or clear
-        app data without exporting your vault — your messages become
+        app data without exporting your secret key — your messages become
         permanently unreadable. We cannot recover them.
       </p>
       <p>
         The same applies if your keys are <strong>stolen or exposed</strong>.
         Because every message addressed to your keys can be decrypted by
         whoever holds them, a compromised key can unlock your entire message
-        history — past and future. Treat your vault export and device access
+        history — past and future. Treat your secret key export and device access
         like a PIN or a house key: whoever holds it holds your mailbox. We
         cannot detect, prevent, or undo access by someone who legitimately
         possesses your keys, and we are not responsible for losses arising
@@ -192,11 +192,11 @@ export function HowItWorksContent() {
         point at: blocking, reporting, and public profiles. A username is bound
         to your device's identity key — it is not a real-name account, there
         is no email, no password, and no central login. Lose the device without
-        a vault export and the username becomes unreachable forever; that is
+        a secret key export and the username becomes unreachable forever; that is
         the price of true anonymity.
       </p>
       <p>
-        Signing in on a new device works through your <strong>vault
+        Signing in on a new device works through your <strong>secret key
         export</strong>: an encrypted backup file containing only your private
         keys, protected by a passphrase you choose. Import it and your
         username, bait, and ability to read old messages all come back.
@@ -250,7 +250,7 @@ export function HowItWorksContent() {
         <li><strong>Cast</strong> — sending a message into the pool.</li>
         <li><strong>Catch</strong> — a message that arrived for your bait.</li>
         <li><strong>Bottle</strong> — one encrypted message plus its wrapped keys.</li>
-        <li><strong>Vault</strong> — your encrypted export of private keys.</li>
+        <li><strong>Secret key</strong> — your encrypted export of private keys.</li>
         <li><strong>Relay / server</strong> — the blind courier that stores ciphertext.</li>
       </ul>
     </>
@@ -271,7 +271,7 @@ export function PrivacyContent() {
         <li>Message plaintext — encrypted before it leaves your device.</li>
         <li>Private keys (identity, pool, reply) — stored in on-device storage
           (IndexedDB). They are never transmitted.</li>
-        <li>Your vault export — an encrypted backup you choose to create.</li>
+        <li>Your secret key export — an encrypted backup you choose to create.</li>
       </ul>
 
       <h3>What the server sees</h3>
@@ -323,15 +323,15 @@ export function PrivacyContent() {
       <p>
         Your private keys are the only thing that can decrypt messages sent
         to you. If a key is stolen — through malware, a shared device, a
-        leaked vault export, or any other means — the holder can read every
+        leaked secret key export, or any other means — the holder can read every
         message ever addressed to that key, including messages from long
         ago. This is inherent to how end-to-end encryption works: the
         server never sees your keys, so it also cannot tell whether access
         came from you or an impostor.
       </p>
       <p>
-        Guard your keys accordingly: never share a vault export, keep your
-        vault passphrase separate from the file itself, and revoke devices
+        Guard your keys accordingly: never share a secret key export, keep your
+        secret key passphrase separate from the file itself, and revoke devices
         you no longer control (Settings → devices). If you believe a key is
         compromised, stop using it and generate a fresh identity — there is
         no way to "rotate" a leaked key retroactively.
@@ -374,7 +374,7 @@ export function PrivacyContent() {
 
       <h3>Your controls</h3>
       <p>
-        Export your vault to back up keys, delete app data to wipe everything
+        Export your secret key to back up keys, delete app data to wipe everything
         locally, and use a different device identity at any time — there is no
         central account tying your activity together.
       </p>

@@ -85,7 +85,7 @@ export function CatchPage() {
             style={{ "--background": "#fff3cd", "--color": "#333" } as React.CSSProperties}
           >
             <IonLabel>
-              <strong>🔑 backup your vault</strong>
+              <strong>🔑 backup your secret key</strong>
               <p>no export yet — lose this device and every message is gone forever</p>
             </IonLabel>
             <IonButton

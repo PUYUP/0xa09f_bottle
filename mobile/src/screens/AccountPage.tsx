@@ -125,7 +125,7 @@ export function AccountPage({
         )}
         <IonItem button onClick={() => fileRef.current?.click()}>
           <IonIcon icon={cloudUpload} slot="start" color="primary" />
-          <IonLabel>import vault</IonLabel>
+          <IonLabel>import secret key</IonLabel>
           <IonNote slot="end">restore keys</IonNote>
         </IonItem>
         <IonItem
@@ -135,7 +135,7 @@ export function AccountPage({
           }
         >
           <IonIcon icon={cloudDownload} slot="start" color="primary" />
-          <IonLabel>export vault</IonLabel>
+          <IonLabel>export secret key</IonLabel>
           <IonNote slot="end">backup</IonNote>
         </IonItem>
         {identity?.username && (

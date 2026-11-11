@@ -112,7 +112,7 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
           </button>
           <div className="border-t border-neutral-300 pt-2 text-[13px] text-neutral-600">
             <p className="mb-1">
-              coming back on a new device? your vault export holds the private
+              coming back on a new device? your secret key export holds the private
               keys that prove this identity — import it to restore your
               username, bait and message history.
             </p>
@@ -120,7 +120,7 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
               className="retro-link"
               onClick={() => fileRef.current?.click()}
             >
-              📂 import vault / secret file
+              📂 import secret key file
             </button>
             <input
               ref={fileRef}
@@ -140,7 +140,7 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
                     onClaimed();
                   } else {
                     setNotice(
-                      "vault imported — your keys are restored. pick a name below to finish setup."
+                      "secret key imported — your keys are restored. pick a name below to finish setup."
                     );
                   }
                 } catch (ex) {
@@ -488,7 +488,7 @@ export default function App() {
       {vaultDue && (
         <div className="bevel mb-2">
           <div className="retro-titlebar">
-            <span>🔑 vault backup</span>
+            <span>🔑 secret key backup</span>
             <button
               className="retro-btn"
               style={{ padding: "0 6px" }}
@@ -502,7 +502,7 @@ export default function App() {
           </div>
           <div className="retro-body flex items-center justify-between gap-3 text-[13px]">
             <span>
-              no vault export yet — lose this device and every message is gone
+              no secret key export yet — lose this device and every message is gone
               forever. export your keys to a file you keep safe.
             </span>
             <button
@@ -513,7 +513,7 @@ export default function App() {
                   .catch((e) => log(`export: ${(e as Error).message}`, "err"))
               }
             >
-              export vault
+              export secret key
             </button>
           </div>
         </div>
