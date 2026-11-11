@@ -665,7 +665,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                 }}
                 title="throw more bait"
               >
-                + add
+                + throw
               </button>
               <button
                 className="retro-btn retro-btn-sm md:hidden"
@@ -693,7 +693,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                   onClick={openBaitDialog}
                 >
                   <span className="bait-emoji">🎣</span>
-                  <span className="bait-status">+ new</span>
+                  <span className="bait-status">+ throw</span>
                 </button>
               }
             />
