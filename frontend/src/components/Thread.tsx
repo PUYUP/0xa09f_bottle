@@ -8,12 +8,10 @@ function MessageNode({
   node,
   sentIds,
   onOpen,
-  busy,
 }: {
   node: ThreadNode;
   sentIds: Set<string>;
   onOpen?: (node: ThreadNode) => void;
-  busy?: boolean;
 }) {
   const { bottle, plain, kid, claim } = node.rec;
   const [replying, setReplying] = useState(false);
@@ -24,20 +22,6 @@ function MessageNode({
   const isSent = claim?.status === "SENT";
   const canReply =
     !!plain?.reply && depth < MAX_THREAD_DEPTH && !isSent && !sentIds.has(bottle!.id);
-  // Reply count = locally-readable descendants only. Server childCount
-  // counts EVERY participant's replies (including conversations between
-  // other users we can't decrypt) — showing it would leak their existence.
-  // "… ⏳" appears only on nodes we authored whose replies are still fetching.
-  const replyTotal = countReplies(node);
-  const authoredByUs = sentIds.has(bottle?.id || "");
-  const repliesPending =
-    authoredByUs && (node.rec.childCount || 0) > node.children.length;
-  const replyTag =
-    replyTotal > 0
-      ? ` · 💬 ${replyTotal} repl${replyTotal === 1 ? "y" : "ies"}`
-      : repliesPending
-        ? ` · 💬 …${busy ? " ⏳" : ""}`
-        : "";
 
   return (
     <div
@@ -51,7 +35,6 @@ function MessageNode({
         {claim?.status || "CLAIMED"} · {claim?.deliveries ?? "?"}/{bottle!.maxDeliveries} · depth{" "}
         {depth}/{MAX_THREAD_DEPTH} · key {(kid || "").slice(0, 8)}
         {isSent && " · (yours)"}
-        {replyTag && <span className="text-blue-800">{replyTag}</span>}
       </div>
       {deleted ? (
         <p className="text-[15px] italic text-neutral-500">[this message was deleted]</p>
@@ -150,55 +133,47 @@ function MessageNode({
   );
 }
 
-// Compact folder-style tree: each level adds ~20px, vertical guide lines are
-// drawn by .tree-child::before and stop after the last sibling.
-function TreeChildren({
-  node,
-  sentIds,
+// FlatThread renders a whole thread as one straight list — no per-depth
+// indentation. Messages are ordered by depth then timestamp so the
+// conversation reads #0 root, #1 replies, #2 replies-to-replies, etc.
+function collectNodes(node: ThreadNode, out: ThreadNode[] = []): ThreadNode[] {
+  out.push(node);
+  for (const c of node.children) collectNodes(c, out);
+  return out;
+}
+
+function bottleTimeSec(rec: ThreadNode["rec"]): number {
+  const c = rec.bottle?.createdAt || 0;
+  return c > 1e11 ? Math.floor(c / 1000) : c;
+}
+
+export function FlatThread({
+  root,
   onOpen,
-  busy,
 }: {
-  node: ThreadNode;
-  sentIds: Set<string>;
+  root: ThreadNode;
   onOpen?: (node: ThreadNode) => void;
-  busy?: boolean;
 }) {
-  if (!node.children.length) return null;
+  const { records } = useApp();
+  const sentIds = new Set(
+    records.filter((r) => r.id.startsWith("sent:")).map((r) => r.bottle?.id).filter(Boolean) as string[]
+  );
+  const nodes = collectNodes(root).sort((a, b) => {
+    const da = a.rec.bottle?.depth || 1;
+    const db = b.rec.bottle?.depth || 1;
+    if (da !== db) return da - db;
+    return bottleTimeSec(a.rec) - bottleTimeSec(b.rec);
+  });
   return (
-    <div className="tree-children">
-      {node.children.map((c, i) => (
-        <div key={c.rec.id} className={`tree-child${i === node.children.length - 1 ? " last" : ""}`}>
-          <span className="tree-glyph">{i === node.children.length - 1 ? "└─" : "├─"}</span>
-          <Thread node={c} sentIds={sentIds} onOpen={onOpen} busy={busy} />
-        </div>
+    <div className="chat-thread">
+      <div className="mb-2 text-[13px] text-neutral-600">
+        total messages: {nodes.length}
+      </div>
+      {nodes.map((n) => (
+        <MessageNode key={n.rec.id} node={n} sentIds={sentIds} onOpen={onOpen} />
       ))}
     </div>
   );
-}
-
-function Thread({
-  node,
-  sentIds,
-  onOpen,
-  busy,
-}: {
-  node: ThreadNode;
-  sentIds: Set<string>;
-  onOpen?: (node: ThreadNode) => void;
-  busy?: boolean;
-}) {
-  return (
-    <div>
-      <MessageNode node={node} sentIds={sentIds} onOpen={onOpen} busy={busy} />
-      <TreeChildren node={node} sentIds={sentIds} onOpen={onOpen} busy={busy} />
-    </div>
-  );
-}
-
-export function countReplies(node: ThreadNode): number {
-  let n = 0;
-  for (const c of node.children) n += 1 + countReplies(c);
-  return n;
 }
 
 export function findNode(roots: ThreadNode[], bottleId: string): ThreadNode | null {
@@ -208,28 +183,4 @@ export function findNode(roots: ThreadNode[], bottleId: string): ThreadNode | nu
     if (found) return found;
   }
   return null;
-}
-
-export function ThreadList({
-  roots,
-  onOpen,
-  busy,
-}: {
-  roots: ThreadNode[];
-  onOpen?: (node: ThreadNode) => void;
-  busy?: boolean;
-}) {
-  const { records } = useApp();
-  const sentIds = new Set(
-    records.filter((r) => r.id.startsWith("sent:")).map((r) => r.bottle?.id).filter(Boolean) as string[]
-  );
-  return (
-    <>
-      {roots.map((r) => (
-        <div key={r.rec.id} className="mb-3">
-          <Thread node={r} sentIds={sentIds} onOpen={onOpen} busy={busy} />
-        </div>
-      ))}
-    </>
-  );
 }

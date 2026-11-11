@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "./hooks/useApp";
 import { AccountPanel, BlocksCard, DeviceCard, DevicesCard, MyKeysPanel, PoolPanel, StatsCard, SubscriptionCard, VaultButtons } from "./components/Panels";
-import { ThreadList, findNode } from "./components/Thread";
+import { FlatThread, findNode } from "./components/Thread";
 import { BaitLine } from "./components/BaitLine";
 import { BOTTLE_QUOTA, MAX_LOCAL_KEYS } from "./lib/crypto";
 import {
@@ -662,9 +662,8 @@ export default function App() {
             <div className="mb-2 text-[13px] text-neutral-600">⏳ loading replies…</div>
           )}
           {detailNode ? (
-            <ThreadList
-              roots={[detailNode]}
-              busy={threadLoads > 0}
+            <FlatThread
+              root={detailNode}
               onOpen={(n) => {
                 const id = n.rec.bottle?.id;
                 if (!id) return;
