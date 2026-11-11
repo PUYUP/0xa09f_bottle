@@ -394,3 +394,17 @@ button.bait-slot {
 .chat-thread .msg.clickable:hover {
   background: transparent;
 }
+
+/* Header menu: compress the big retro-tool tiles into slim buttons. */
+.app-menu .retro-tool {
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: row;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.app-menu .retro-tool .retro-tool-icon {
+  font-size: 15px;
+}

@@ -378,61 +378,45 @@ export default function App() {
       .finally(() => setThreadLoads((n) => Math.max(0, n - 1)));
   };
 
+  const detailNode = detailPath.length
+    ? findNode(threads, detailPath[detailPath.length - 1])
+    : null;
+
   return (
-    <main className="mx-auto max-w-3xl p-2">
-      {/* ── site header ────────────────────────────────────── */}
-      <div className="mb-2 text-center">
-        <h1
-          className="text-3xl font-bold"
-          style={{ textShadow: "1px 1px 0 #ffffff, -1px -1px 0 #909090" }}
-        >
-          <span className="text-blue-900">🌊</span> a09f
-        </h1>
-        <p className="text-xs italic text-neutral-700">
-          A quiet cove for a crowded mind — est. 2025
-        </p>
-        <hr className="retro-hr" />
-      </div>
-
-      {/* ── status bar ─────────────────────────────────────── */}
-      <div className="bevel mb-2 flex flex-wrap items-center justify-between gap-2 px-2 py-1 text-[13px]">
-        <span>
-          you are:{" "}
-          <b>{identity?.username ? `@${identity.username}` : "anonymous drifter"}</b>
-          {!state.ready && <span className="text-neutral-600"> · booting…</span>}
-          {identity?.username && (
-            <button
-              className="retro-link ml-2"
-              title="switch to a different identity — keys & messages are wiped locally; your account stays claimable via secret key"
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "switch identity? this wipes keys and messages on this device — export your secret key first if you want to keep them."
+    <main className="flex h-screen flex-col gap-2 overflow-hidden p-2">
+      {/* ── header: brand left, menu right ─────────────────── */}
+      <div className="bevel flex flex-wrap items-center justify-between gap-2 px-3 py-1.5">
+        <div className="flex min-w-0 items-baseline gap-3">
+          <h1
+            className="whitespace-nowrap text-2xl font-bold"
+            style={{ textShadow: "1px 1px 0 #ffffff, -1px -1px 0 #909090" }}
+          >
+            <span className="text-blue-900">🌊</span> a09f
+          </h1>
+          <span className="truncate text-[13px] text-neutral-700">
+            you are:{" "}
+            <b>{identity?.username ? `@${identity.username}` : "anonymous drifter"}</b>
+            {!state.ready && <span className="text-neutral-600"> · booting…</span>}
+            {identity?.username && (
+              <button
+                className="retro-link ml-2"
+                title="switch to a different identity — keys & messages are wiped locally; your account stays claimable via secret key"
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "switch identity? this wipes keys and messages on this device — export your secret key first if you want to keep them."
+                    )
                   )
-                )
-                  return;
-                logout().catch((e) => log(`logout: ${(e as Error).message}`, "err"));
-              }}
-            >
-              switch identity
-            </button>
-          )}
-        </span>
-        <span className="text-neutral-700">
-          🎣 bait in pool: <b>{state.activePoolKeys ?? "…"}</b>/{MAX_LOCAL_KEYS} · casts:{" "}
-          <b>{BOTTLE_QUOTA}</b>/day · e2ee:{" "}
-          <b className="text-green-700">on</b>
-          {state.syncing && <span className="ml-2 text-amber-700">⟳ syncing messages…</span>}
-        </span>
-      </div>
-
-      {/* ── toolbar (yahoo messenger style) ────────────────── */}
-      <div className="bevel mb-2">
-        <div className="retro-titlebar">
-          <span>⚙ menu</span>
-          <span className="text-[13px]">a09f.com</span>
+                    return;
+                  logout().catch((e) => log(`logout: ${(e as Error).message}`, "err"));
+                }}
+              >
+                switch identity
+              </button>
+            )}
+          </span>
         </div>
-        <div className="retro-body flex flex-wrap gap-2 p-3">
+        <div className="app-menu flex flex-wrap items-center justify-end gap-1">
           <button
             className="retro-tool"
             disabled={busy}
@@ -479,8 +463,22 @@ export default function App() {
         </div>
       </div>
 
+      {/* ── slim status strip ──────────────────────────────── */}
+      <div className="bevel flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1 text-[12px] text-neutral-700">
+        <span>
+          🎣 bait in pool: <b>{state.activePoolKeys ?? "…"}</b>/{MAX_LOCAL_KEYS}
+        </span>
+        <span>
+          casts: <b>{BOTTLE_QUOTA}</b>/day
+        </span>
+        <span>
+          e2ee: <b className="text-green-700">on</b>
+        </span>
+        {state.syncing && <span className="text-amber-700">⟳ syncing messages…</span>}
+      </div>
+
       {billing?.status === "trialing" && billing.daysLeft <= 7 && billing.entitled && (
-        <div className="bevel mb-2">
+        <div className="bevel">
           <div className="retro-titlebar">
             <span>⏳ free trial</span>
             <span className="text-[13px]">{billing.daysLeft}d left</span>
@@ -505,7 +503,7 @@ export default function App() {
       )}
 
       {vaultDue && (
-        <div className="bevel mb-2">
+        <div className="bevel">
           <div className="retro-titlebar">
             <span>🔑 secret key backup</span>
             <button
@@ -553,172 +551,38 @@ export default function App() {
         </div>
       )}
 
-      {/* ── composer ───────────────────────────────────────── */}
-      <div className="bevel mb-2">
-        <div className="retro-titlebar">
-          <span>🎣 cast into the sea</span>
-          <span className="text-[13px]">sealed with AES-256-GCM</span>
-        </div>
-        <div className="retro-body">
-          <div className="flex gap-2">
-            <textarea
-              className="retro-input retro-msg w-full resize-none"
-              rows={3}
-              placeholder="write something for the sea…"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  run(async () => {
-                    await dropBottle(message, "86400");
-                    setMessage("");
-                  });
-                }
-              }}
-            />
-            <button
-              className="retro-btn retro-cast"
-              disabled={busy}
-              onClick={() =>
-                run(async () => {
-                  await dropBottle(message, "86400");
-                  setMessage("");
-                })
-              }
-            >
-              🎣<br />
-              cast it
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {page === "bait" && <MyKeysPanel onClose={() => setPage("catch")} />}
-      {page === "pool" && <PoolPanel onClose={() => setPage("catch")} />}
-      {page === "account" && (
-        <>
-          <AccountPanel onClose={() => setPage("catch")} />
-          <SubscriptionCard />
-          <DevicesCard />
-          <BlocksCard />
-          <DeviceCard />
-          <StatsCard />
-        </>
-      )}
-
-      {/* ── catch page ─────────────────────────────────────── */}
-      {page === "catch" && (() => {
-        const detailNode = detailPath.length ? findNode(threads, detailPath[detailPath.length - 1]) : null;
-        return (
-      <div className="bevel mb-2">
-        <div className="retro-titlebar">
-          <span>
-            {detailNode
-              ? `📬 message ${(detailNode.rec.bottle?.id || "").slice(0, 8)} — depth ${(detailNode.rec.bottle?.depth || 1)}`
-              : `📬 catch — ${threads.length} message${threads.length === 1 ? "" : "s"}`}
-          </span>
-          <span className="flex items-center gap-2 text-[13px]">
-            {detailNode && (
-              <span className="retro-link" onClick={() => setDetailPath([])}>← back to catch</span>
-            )}
-            {!detailNode && "only you can read these"}
+      {/* ── workspace: thread sidebar + chat pane ──────────── */}
+      <div className="flex min-h-0 flex-1 gap-2">
+        {/* left: thread list */}
+        <aside className="bevel flex w-[20rem] shrink-0 flex-col">
+          <div className="retro-titlebar">
+            <span>
+              📥 catch — {threads.length} message{threads.length === 1 ? "" : "s"}
+            </span>
             <button
               className="retro-btn"
               style={{ padding: "0 8px" }}
               title="check for new catches"
               onClick={() => run(checkBottles)}
             >
-              🔄 refresh
+              🔄
             </button>
-          </span>
-        </div>
-        <div className="retro-body">
-          {!detailNode && (
+          </div>
+          <div className="retro-body flex-1 overflow-y-auto">
             <BaitLine
               onOpen={(bottleId) => {
+                setPage("catch");
                 loadThread(bottleId);
                 setDetailPath([bottleId]);
               }}
             />
-          )}
-          {detailNode && (
-            <div className="mb-2 text-[13px] text-neutral-600">
-              <span className="retro-link" onClick={() => setDetailPath([])}>📬 catch</span>
-              {detailPath.map((id, i) => (
-                <span key={id}>
-                  {" / "}
-                  <span
-                    className={i === detailPath.length - 1 ? "font-bold text-neutral-800" : "retro-link"}
-                    onClick={() => i < detailPath.length - 1 && setDetailPath(detailPath.slice(0, i + 1))}
-                  >
-                    #{id.slice(0, 8)}
-                  </span>
-                </span>
-              ))}
-            </div>
-          )}
-          {detailNode && threadLoads > 0 && (
-            <div className="mb-2 text-[13px] text-neutral-600">⏳ loading replies…</div>
-          )}
-          {detailNode ? (
-            <FlatThread
-              root={detailNode}
-              onOpen={(n) => {
-                const id = n.rec.bottle?.id;
-                if (!id) return;
-                // Always (re)fetch this node's children — clicking the node
-                // that is already the detail root must still lazy-load its
-                // replies, otherwise the "💬 N ▸" tag is a dead end.
-                loadThread(id);
-                if (id !== detailPath[detailPath.length - 1]) {
-                  setDetailPath((p) => [...p, id]);
-                }
-              }}
-            />
-          ) : (
-            <>
-          {threads.length === 0 &&
-            (isNewUser ? (
-              <div className="msg bevel-in">
-                <p className="mb-2">
-                  <b>👋 welcome drifter!</b> This corner of the internet seals every catch with
-                  end-to-end encryption — nobody, not even the server, can read what you write.
-                  Only the sender and the intended recipient ever see the plaintext.
-                </p>
-                <p className="mb-2">
-                  We've already cast <b>3 starter bait</b> for you — they're in the water
-                  now. To start catching:
-                </p>
-                <ol className="mb-3 list-decimal pl-6">
-                  <li>
-                    <span className="retro-link" onClick={openBaitDialog}>
-                      🎣 throw more bait
-                    </span>{" "}
-                    — generate extra keys to widen your catch surface
-                  </li>
-                  <li>
-                    <span className="retro-link" onClick={() => run(checkBottles)}>
-                      🪝 check catch
-                    </span>{" "}
-                    — scan the sea for catches addressed to your bait
-                  </li>
-                  <li>
-                    <span className="retro-link" onClick={() => setPage("account")}>
-                      👤 claim a username
-                    </span>{" "}
-                    — needed for blocking &amp; reporting
-                  </li>
-                </ol>
-                <p className="text-neutral-600">
-                  …or just cast below and see what bites back.
-                </p>
-              </div>
-            ) : (
-              <div className="msg bevel-in text-center text-neutral-700">
-                🎣 the sea is quiet — nothing on the line yet.
-              </div>
-            ))}
+            {page === "catch" && (
+              <>
+                {threads.length === 0 && (
+                  <div className="msg bevel-in text-center text-[13px] text-neutral-600">
+                    🎣 the sea is quiet — nothing on the line yet.
+                  </div>
+                )}
           {threads.slice(0, threadLimit).map((r) => {
             // List shows badge only — reply counts live inside the thread
             // detail, so no need to track locally-readable descendants here.
@@ -822,6 +686,7 @@ export default function App() {
               </div>
             );
           })}
+
           {threads.length > threadLimit && (
             <div className="mt-2 text-center">
               <button
@@ -832,35 +697,184 @@ export default function App() {
               </button>
             </div>
           )}
-            </>
-          )}
-        </div>
-      </div>
-        );
-      })()}
-
-      {/* ── log ────────────────────────────────────────────── */}
-      <div className="bevel">
-        <div className="retro-titlebar">
-          <span>📟 system log</span>
-          <span className="text-[13px]">debug console</span>
-        </div>
-        <div className="retro-body max-h-40 overflow-y-auto font-mono text-[13px] leading-tight">
-          {state.logs.map((l) => (
-            <div
-              key={l.id}
-              className={
-                l.cls === "err"
-                  ? "text-red-700"
-                  : l.cls === "warn"
-                    ? "text-amber-700"
-                    : "text-neutral-600"
-              }
-            >
-              [{l.time}] {l.msg}
+              </>
+            )}
+          </div>
+          {/* system log pinned to the bottom of the sidebar */}
+          <div className="shrink-0 border-t-2 border-[#808080]">
+            <div className="retro-titlebar">
+              <span>📟 system log</span>
+              <span className="text-[12px]">debug console</span>
             </div>
-          ))}
-        </div>
+            <div className="max-h-32 overflow-y-auto bg-white px-2 py-1 font-mono text-[12px] leading-tight">
+              {state.logs.map((l) => (
+                <div
+                  key={l.id}
+                  className={
+                    l.cls === "err"
+                      ? "text-red-700"
+                      : l.cls === "warn"
+                        ? "text-amber-700"
+                        : "text-neutral-600"
+                  }
+                >
+                  [{l.time}] {l.msg}
+                </div>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        {/* right: chat detail / panels */}
+        <section className="bevel flex min-w-0 flex-1 flex-col">
+          <div className="retro-titlebar">
+            <span className="truncate">
+              {detailNode
+                ? `📬 #${(detailNode.rec.bottle?.id || "").slice(0, 8)} — ${(detailNode.rec.plain?.text || "").slice(0, 48)}`
+                : page === "bait"
+                  ? "🪱 my bait"
+                  : page === "pool"
+                    ? "🌊 bait pool"
+                    : page === "account"
+                      ? "👤 account"
+                      : "💬 catch"}
+            </span>
+            <span className="flex items-center gap-2 text-[13px]">
+              {detailNode && (
+                <span className="retro-link" onClick={() => setDetailPath([])}>← back</span>
+              )}
+              {page !== "catch" && (
+                <span className="retro-link" onClick={() => setPage("catch")}>✕ close</span>
+              )}
+              {threadLoads > 0 && <span className="text-neutral-600">⏳ loading…</span>}
+            </span>
+          </div>
+          <div className="retro-body flex-1 overflow-y-auto">
+            {page === "bait" && <MyKeysPanel onClose={() => setPage("catch")} />}
+            {page === "pool" && <PoolPanel onClose={() => setPage("catch")} />}
+            {page === "account" && (
+              <>
+                <AccountPanel onClose={() => setPage("catch")} />
+                <SubscriptionCard />
+                <DevicesCard />
+                <BlocksCard />
+                <DeviceCard />
+                <StatsCard />
+              </>
+            )}
+            {page === "catch" && !detailNode && (
+              threads.length === 0 && isNewUser ? (
+                <div className="msg bevel-in">
+                  <p className="mb-2">
+                    <b>👋 welcome drifter!</b> This corner of the internet seals every catch with
+                    end-to-end encryption — nobody, not even the server, can read what you write.
+                    Only the sender and the intended recipient ever see the plaintext.
+                  </p>
+                  <p className="mb-2">
+                    We've already cast <b>3 starter bait</b> for you — they're in the water
+                    now. To start catching:
+                  </p>
+                  <ol className="mb-3 list-decimal pl-6">
+                    <li>
+                      <span className="retro-link" onClick={openBaitDialog}>
+                        🎣 throw more bait
+                      </span>{" "}
+                      — generate extra keys to widen your catch surface
+                    </li>
+                    <li>
+                      <span className="retro-link" onClick={() => run(checkBottles)}>
+                        🪝 check catch
+                      </span>{" "}
+                      — scan the sea for catches addressed to your bait
+                    </li>
+                    <li>
+                      <span className="retro-link" onClick={() => setPage("account")}>
+                        👤 claim a username
+                      </span>{" "}
+                      — needed for blocking &amp; reporting
+                    </li>
+                  </ol>
+                  <p className="text-neutral-600">
+                    …or just cast below and see what bites back.
+                  </p>
+                </div>
+              ) : threads.length === 0 ? null : (
+                <div className="msg bevel-in text-center text-[13px] text-neutral-600">
+                  💬 select a conversation on the left
+                </div>
+              )
+            )}
+            {page === "catch" && detailNode && (
+              <>
+                <div className="mb-2 text-[13px] text-neutral-600">
+                  <span className="retro-link" onClick={() => setDetailPath([])}>📬 catch</span>
+                  {detailPath.map((id, i) => (
+                    <span key={id}>
+                      {" / "}
+                      <span
+                        className={i === detailPath.length - 1 ? "font-bold text-neutral-800" : "retro-link"}
+                        onClick={() => i < detailPath.length - 1 && setDetailPath(detailPath.slice(0, i + 1))}
+                      >
+                        #{id.slice(0, 8)}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+                <FlatThread
+                  root={detailNode}
+                  onOpen={(n) => {
+                    const id = n.rec.bottle?.id;
+                    if (!id) return;
+                    loadThread(id);
+                    if (id !== detailPath[detailPath.length - 1]) {
+                      setDetailPath((p) => [...p, id]);
+                    }
+                  }}
+                />
+              </>
+            )}
+          </div>
+          {/* composer — pinned to the bottom of the chat pane */}
+          <div className="shrink-0 border-t-2 border-[#808080]">
+            <div className="retro-titlebar">
+              <span>🎣 cast into the sea</span>
+              <span className="text-[12px]">sealed with AES-256-GCM</span>
+            </div>
+            <div className="bg-[#c0c0c0] p-2">
+              <div className="flex gap-2">
+                <textarea
+                  className="retro-input retro-msg w-full resize-none"
+                  rows={2}
+                  placeholder="write something for the sea…"
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      run(async () => {
+                        await dropBottle(message, "86400");
+                        setMessage("");
+                      });
+                    }
+                  }}
+                />
+                <button
+                  className="retro-btn retro-cast"
+                  disabled={busy}
+                  onClick={() =>
+                    run(async () => {
+                      await dropBottle(message, "86400");
+                      setMessage("");
+                    })
+                  }
+                >
+                  🎣<br />
+                  cast it
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
 
       {/* ── throw bait dialog ──────────────────────────────── */}
