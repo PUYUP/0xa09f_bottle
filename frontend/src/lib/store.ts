@@ -1498,6 +1498,63 @@ async function evictMetaOverflow() {
 // ---------- realtime (SSE) ----------
 // Server pushes `event: bottle` when a new bottle matches our kid filter;
 // we debounce and run a normal scan — crypto path stays identical to polling.
+// ---------- notification sound ----------
+// Short two-note chime via Web Audio — no asset file needed. AudioContext
+// requires a user gesture before it can play, so we resume it on the first
+// pointer/key interaction and keep it warm afterwards.
+let notifyCtx: AudioContext | null = null;
+let lastNotifyAt = 0;
+
+function ensureAudioCtx(): AudioContext | null {
+  try {
+    if (!notifyCtx) {
+      const AC =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AC) return null;
+      notifyCtx = new AC();
+    }
+    if (notifyCtx.state === "suspended") void notifyCtx.resume();
+    return notifyCtx;
+  } catch {
+    return null;
+  }
+}
+
+if (typeof window !== "undefined") {
+  const resume = () => {
+    ensureAudioCtx();
+  };
+  window.addEventListener("pointerdown", resume);
+  window.addEventListener("keydown", resume);
+}
+
+function playNotifySound() {
+  const now = Date.now();
+  if (now - lastNotifyAt < 800) return; // coalesce event bursts
+  lastNotifyAt = now;
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+  try {
+    const t = ctx.currentTime;
+    for (const [i, freq] of [880, 1174.7].entries()) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const start = t + i * 0.12;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.4, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.35);
+    }
+  } catch {
+    // audio is best-effort
+  }
+}
+
 let eventsSource: EventSource | null = null;
 // eventsKidsKey tracks the kid set of the LIVE subscription — the server
 // fixes it at subscribe time, so a new token with the same kids does not
@@ -1586,6 +1643,14 @@ export async function connectEvents() {
           }
           console.log("[sse] bottle event", data.id?.slice(0, 8));
           if (data.id) {
+            // Chime only for inbound bottles — our own casts also carry a
+            // self:<us> envelope, so the event fires for them too. A
+            // sent:<id> record means we authored it.
+            void idbGet<ThreadRecord>(META_STORE, `sent:${data.id}`)
+              .then((own) => {
+                if (!own) playNotifySound();
+              })
+              .catch(() => {});
             // Replies carry rootId; a root bottle's own id is the thread
             // root. Either way fetch that thread directly — an open chat
             // updates without waiting for the stats poll.
