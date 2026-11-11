@@ -76,6 +76,12 @@ function UsernameGate({ onClaimed }: { onClaimed: () => void }) {
   };
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col items-center justify-center p-4">
+      <h1
+        className="mb-3 text-center text-4xl font-bold"
+        style={{ textShadow: "2px 2px 0 #ffffff, -2px -2px 0 #909090" }}
+      >
+        <span className="text-blue-900">🌊</span> a09f
+      </h1>
       <div className="bevel w-full">
         <div className="retro-titlebar">
           <span>👤 choose your name</span>
@@ -277,6 +283,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity?.username]);
 
+  // Auto-expand the baits card while a server sync is in flight so the
+  // user sees live status instead of a collapsed strip.
+  useEffect(() => {
+    if (state.syncing) setBaitOpen(true);
+  }, [state.syncing]);
+
   // New-catch toast: an SSE bottle event means something landed on our
   // bait — flash a banner for a few seconds.
   useEffect(() => {
@@ -440,12 +452,6 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
       await replyBottle(replyTarget.rec, t);
     });
   };
-
-  // Auto-expand the baits card while a server sync is in flight so the
-  // user sees live status instead of a collapsed strip.
-  useEffect(() => {
-    if (state.syncing) setBaitOpen(true);
-  }, [state.syncing]);
 
   return (
     <main className="flex h-screen flex-col gap-2 overflow-hidden p-2">
@@ -721,6 +727,12 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
           <div className="retro-body flex-1 overflow-y-auto">
             {page === "catch" && (
               <>
+                {state.syncing && (
+                  <div className="mb-2 flex items-center gap-2 border border-amber-500 bg-amber-50 px-2 py-1 text-[12px] text-amber-800">
+                    <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+                    loading your messages…
+                  </div>
+                )}
                 {threads.length === 0 && (
                   <div className="msg bevel-in text-center text-[13px] text-neutral-600">
                     🎣 the sea is quiet — nothing on the line yet.
