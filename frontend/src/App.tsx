@@ -456,7 +456,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
   return (
     <main className="flex h-screen flex-col gap-2 overflow-hidden p-2">
       {/* ── header: brand left, menu right ─────────────────── */}
-      <div className="bevel flex flex-wrap items-center justify-between gap-2 px-3 py-1.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1 py-1">
         <div className="flex min-w-0 items-baseline gap-3">
           <h1
             className="whitespace-nowrap text-2xl font-bold"
