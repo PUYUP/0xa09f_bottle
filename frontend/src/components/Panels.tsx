@@ -251,6 +251,7 @@ export function PoolPanel({ onClose }: { onClose: () => void }) {
 
 export function AccountPanel({ onClose }: { onClose: () => void }) {
   const [username, setUsername] = useState("");
+  const importRef = useRef<HTMLInputElement>(null);
   const identity = useAppIdentity();
 
   return (
@@ -303,6 +304,36 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
         )}
+        <div className="border-t border-neutral-300 pt-2">
+          <p className="mb-1 text-[13px] text-neutral-600">
+            🔑 secret key — your private keys, encrypted with a passphrase you choose:
+          </p>
+          <div className="flex gap-2">
+            <button
+              className="retro-btn"
+              onClick={() => exportVault().catch((e) => log(`export: ${(e as Error).message}`, "err"))}
+            >
+              export secret key
+            </button>
+            <button className="retro-btn" onClick={() => importRef.current?.click()}>
+              import secret key
+            </button>
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (!file) return;
+                importVaultFile(file).catch((err) =>
+                  log(`import: ${(err as Error).message || "failed"}`, "err")
+                );
+              }}
+            />
+          </div>
+        </div>
         {identity?.username && (
           <div className="border-t border-neutral-300 pt-2">
             <p className="mb-1 text-[13px] text-neutral-600">

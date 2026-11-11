@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useApp } from "./hooks/useApp";
-import { AccountPanel, BlocksCard, DeviceCard, DevicesCard, MyKeysPanel, PoolPanel, StatsCard, SubscriptionCard, VaultButtons } from "./components/Panels";
+import { AccountPanel, BlocksCard, DeviceCard, DevicesCard, MyKeysPanel, PoolPanel, StatsCard, SubscriptionCard } from "./components/Panels";
 import { FlatThread, findNode } from "./components/Thread";
 import { BaitLine } from "./components/BaitLine";
 import { BOTTLE_QUOTA, MAX_LOCAL_KEYS, MAX_THREAD_DEPTH } from "./lib/crypto";
@@ -453,7 +453,18 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             )}
           </span>
         </div>
-        <div className="app-menu flex flex-wrap items-center justify-end gap-1">
+        <div className="app-menu flex flex-nowrap items-center justify-end gap-1">
+          <button
+            className="retro-tool"
+            onClick={() => {
+              setPage("catch");
+              setDetailPath([]);
+            }}
+            title="back to the thread list"
+          >
+            <span className="retro-tool-icon">⌂</span>
+            <span>home</span>
+          </button>
           <button
             className="retro-tool"
             disabled={busy}
@@ -464,21 +475,21 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             title="scan the sea for catches addressed to your bait"
           >
             <span className="retro-tool-icon">🪝</span>
-            <span>check catch</span>
+            <span>catch</span>
           </button>
           <button
             className={`retro-tool${page === "pool" ? " active" : ""}`}
             onClick={() => setPage("pool")}
           >
             <span className="retro-tool-icon">🌊</span>
-            <span>bait pool</span>
+            <span>pool</span>
           </button>
           <button
             className={`retro-tool${page === "bait" ? " active" : ""}`}
             onClick={() => setPage("bait")}
           >
             <span className="retro-tool-icon">🪱</span>
-            <span>my bait</span>
+            <span>bait</span>
           </button>
           <button
             className={`retro-tool${page === "account" ? " active" : ""}`}
@@ -487,12 +498,11 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             <span className="retro-tool-icon">👤</span>
             <span>account</span>
           </button>
-          <VaultButtons />
         </div>
       </div>
 
-      {/* ── slim status strip ──────────────────────────────── */}
-      <div className="bevel flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1 text-[12px] text-neutral-700">
+      {/* ── slim status strip (hidden for now — code kept) ──── */}
+      <div className="bevel hidden flex-wrap items-center gap-x-3 gap-y-1 px-2 py-1 text-[12px] text-neutral-700">
         <span>
           🎣 bait in pool: <b>{state.activePoolKeys ?? "…"}</b>/{MAX_LOCAL_KEYS}
         </span>
@@ -503,9 +513,6 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
           e2ee: <b className="text-green-700">on</b>
         </span>
         {state.syncing && <span className="text-amber-700">⟳ syncing messages…</span>}
-        <span className="ml-auto text-[11px] italic text-neutral-900">
-          🎣 waiting · 😋 eaten · 🫥 lost · ❗ unread
-        </span>
       </div>
 
       {billing?.status === "trialing" && billing.daysLeft <= 7 && billing.entitled && (
@@ -584,15 +591,15 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
 
       {/* ── composer + bait line cards above the workspace ── */}
       <div className="flex flex-wrap gap-2">
-      <div className="bevel min-w-[18rem] flex-1">
+      <div className="bevel flex min-w-[18rem] flex-1 flex-col">
         <div className="retro-titlebar">
           <span>🎣 cast into the sea</span>
             <span className="text-[12px]">sealed with AES-256-GCM</span>
           </div>
-          <div className="bg-[#c0c0c0] p-2">
-            <div className="flex gap-2">
+          <div className="flex flex-1 bg-[#c0c0c0] p-2">
+            <div className="flex flex-1 gap-2">
               <textarea
-                className="retro-input retro-msg w-full resize-none"
+                className="retro-input retro-msg h-full w-full resize-none"
                 rows={2}
                 placeholder="write something for the sea…"
                 value={message}
@@ -627,9 +634,12 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         {/* bait line card — right of composer, wraps below on narrow screens */}
         <div className="bevel w-full shrink-0 md:w-fit md:max-w-[30rem]">
           <div className="retro-titlebar">
-            <span>🎣 your bait line</span>
+            <span>🎣 your baits</span>
           </div>
           <div className="retro-body">
+            <div className="mb-1 text-[11px] italic text-neutral-700">
+              🎣 waiting · 😋 eaten · 🫥 lost · ❗ unread
+            </div>
             <BaitLine
               onOpen={(bottleId) => {
                 setPage("catch");
@@ -657,8 +667,8 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         {/* left: thread list */}
         <aside
           className={`bevel w-full shrink-0 flex-col md:w-[20rem] ${
-            page === "catch" && !detailNode ? "flex" : "hidden"
-          } md:flex`}
+            page !== "catch" ? "hidden" : detailNode ? "hidden md:flex" : "flex"
+          }`}
         >
           <div className="retro-titlebar">
             <span>
@@ -838,17 +848,10 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             page === "catch" && !detailNode ? "hidden" : "flex"
           } md:flex`}
         >
+          {page === "catch" && (
           <div className="retro-titlebar">
             <span className="truncate">
-              {detailNode
-                ? `📬 #${(detailNode.rec.bottle?.id || "").slice(0, 8)} — ${(detailNode.rec.plain?.text || "").slice(0, 48)}`
-                : page === "bait"
-                  ? "🪱 my bait"
-                  : page === "pool"
-                    ? "🌊 bait pool"
-                    : page === "account"
-                      ? "👤 account"
-                      : "💬 catch"}
+              {detailNode ? `#${(detailNode.rec.bottle?.id || "").slice(0, 8)}` : ""}
             </span>
             <span className="flex items-center gap-2 text-[13px]">
               {detailNode && (
@@ -866,6 +869,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
               {threadLoads > 0 && <span className="text-neutral-600">⏳ loading…</span>}
             </span>
           </div>
+          )}
 
           <div className="retro-body flex-1 overflow-y-auto">
             {page === "bait" && <MyKeysPanel onClose={() => setPage("catch")} />}
@@ -1054,7 +1058,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
       {/* ── terms & privacy ────────────────────────────────── */}
       {legal && <DocModal kind={legal} onClose={() => setLegal(null)} />}
 
-      <p className="mt-3 text-center text-[13px] text-neutral-600">
+      <p className="mt-3 hidden text-center text-[13px] text-neutral-600 md:block">
         a09f · best viewed at 800×600 · works in netscape navigator · no cookies were harmed
         {" · "}
         <span className="retro-link" onClick={() => setLegal("how")}>how it works</span>
@@ -1063,7 +1067,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         {" · "}
         <span className="retro-link" onClick={() => setLegal("privacy")}>privacy</span>
       </p>
-      <p className="mt-1 text-center text-[12px] text-neutral-500">
+      <p className="mt-1 hidden text-center text-[12px] text-neutral-500 md:block">
         your IP is visible to the relay — use{" "}
         <a
           className="retro-link"

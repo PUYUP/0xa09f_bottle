@@ -404,12 +404,13 @@ button.bait-slot {
   min-width: 0;
   min-height: 0;
   flex-direction: row;
-  gap: 5px;
-  padding: 4px 10px;
-  font-size: 12px;
+  gap: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 .app-menu .retro-tool .retro-tool-icon {
-  font-size: 15px;
+  font-size: 13px;
 }
 
 /* "+ new" bait slot — light blue echoing the titlebar gradient end */
