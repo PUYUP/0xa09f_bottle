@@ -2302,6 +2302,21 @@ export async function revokeDevice(deviceId: string) {
   await api(`/api/me/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
 }
 
+// logout signs out of the local identity: it drops the SSE subscription and
+// wipes all local key/message state, then reloads into the gate. The
+// server-side account (username, blocks, devices, delivered bottles) is
+// untouched — signing back in works by importing a secret key export.
+export async function logout() {
+  eventsSource?.close();
+  eventsSource = null;
+  eventsKidsKey = "";
+  await idbClear(KEY_STORE);
+  await idbClear(META_STORE);
+  await idbClear(KV_STORE);
+  resetIdentityCache();
+  location.reload();
+}
+
 // deleteAccount permanently removes the server-side account (username,
 // identity, key ownership, blocks, reports, sync records) then wipes all
 // local data and reloads into a fresh anonymous state. Encrypted bottles

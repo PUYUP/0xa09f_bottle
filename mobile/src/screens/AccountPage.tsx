@@ -19,6 +19,7 @@ import {
 import {
   cloudDownload,
   cloudUpload,
+  logOutOutline,
   phonePortraitOutline,
   refresh,
   trash,
@@ -30,6 +31,7 @@ import {
   fetchDevices,
   importVaultFile,
   log,
+  logout,
   revokeDevice,
 } from "@shared/store";
 import type { DeviceInfo } from "@shared/store";
@@ -138,6 +140,24 @@ export function AccountPage({
           <IonLabel>export secret key</IonLabel>
           <IonNote slot="end">backup</IonNote>
         </IonItem>
+        {identity?.username && (
+          <IonItem
+            button
+            onClick={() => {
+              if (
+                !window.confirm(
+                  "switch identity? this wipes keys and messages on this device — export your secret key first if you want to keep them."
+                )
+              )
+                return;
+              logout().catch((e) => log(`logout: ${(e as Error).message}`, "err"));
+            }}
+          >
+            <IonIcon icon={logOutOutline} slot="start" color="medium" />
+            <IonLabel>switch identity</IonLabel>
+            <IonNote slot="end">this device only</IonNote>
+          </IonItem>
+        )}
         {identity?.username && (
           <IonItem
             button
