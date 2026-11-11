@@ -229,6 +229,7 @@ export default function App() {
   const state = useApp();
   const [message, setMessage] = useState("");
   const [replyDraft, setReplyDraft] = useState("");
+  const [logOpen, setLogOpen] = useState(false);
   const [baitTtl, setBaitTtl] = useState("86400");
   const [baitDialog, setBaitDialog] = useState(false);
   const [legal, setLegal] = useState<DocKind | null>(null);
@@ -624,7 +625,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         </div>
 
         {/* bait line card — right of composer, wraps below on narrow screens */}
-        <div className="bevel w-full shrink-0 md:w-64">
+        <div className="bevel w-full shrink-0 md:w-fit md:max-w-[30rem]">
           <div className="retro-titlebar">
             <span>🎣 your bait line</span>
           </div>
@@ -798,13 +799,21 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
               </>
             )}
           </div>
-          {/* system log pinned to the bottom of the sidebar */}
+          {/* system log pinned to the bottom of the sidebar — collapsed on mobile until tapped */}
           <div className="shrink-0 border-t-2 border-[#808080]">
             <div className="retro-titlebar">
               <span>📟 system log</span>
-              <span className="text-[12px]">debug console</span>
+              <span className="flex items-center gap-2 text-[12px]">
+                <button
+                  className="retro-btn retro-btn-sm md:hidden"
+                  onClick={() => setLogOpen((v) => !v)}
+                >
+                  {logOpen ? "hide" : "show"}
+                </button>
+                <span className="hidden md:inline">debug console</span>
+              </span>
             </div>
-            <div className="max-h-32 overflow-y-auto bg-white px-2 py-1 font-mono text-[12px] leading-tight">
+            <div className={`max-h-32 overflow-y-auto bg-white px-2 py-1 font-mono text-[12px] leading-tight ${logOpen ? "block" : "hidden"} md:block`}>
               {state.logs.map((l) => (
                 <div
                   key={l.id}
