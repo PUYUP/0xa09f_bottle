@@ -368,7 +368,12 @@ export async function depositUndeposited(ttlRaw: string): Promise<number> {
   const now = Date.now();
   const ttl = depositTTLSeconds(ttlRaw);
   const pending = state.keys.filter(
-    (k) => !k.depositedAt || (k.expiresAt && k.expiresAt <= now)
+    (k) =>
+      !k.depositedAt ||
+      (k.expiresAt && k.expiresAt <= now) ||
+      // "lost" = registry says the key is alive but the pool lost it —
+      // re-depositing is exactly the recovery path for that state.
+      k.status === "lost"
   );
   if (!pending.length) return 0;
   // Owner tag = hash of our identity pubkey: the pool hands out at most one
