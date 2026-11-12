@@ -962,7 +962,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                 >
                   {logOpen ? "hide" : "show"}
                 </button>
-                <span className="hidden text-neutral-300 md:inline">debug console</span>
+
               </span>
             </div>
             <div className={`max-h-32 overflow-y-auto bg-white px-2 py-1 font-mono text-[12px] leading-tight ${logOpen ? "block" : "hidden"}`}>
