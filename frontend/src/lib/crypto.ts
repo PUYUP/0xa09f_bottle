@@ -5,6 +5,7 @@ import { b64ToBytes, b64urlToBytes, bytesToB64, randBytes, textBytes } from "./u
 
 export const WRAP_INFO = "a09f-wrap-v1";
 export const REPLY_PREFIX = "reply:";
+export const BAIT_PREFIX = "bait:";
 export const SELF_PREFIX = "self:";
 export const MAX_THREAD_DEPTH = 20;
 export const BOTTLE_QUOTA = 5;
@@ -37,6 +38,7 @@ export async function storeReplyKey(bottleId: string, pair: KeyRecord): Promise<
 }
 
 const REPLY_INFO = "a09f-reply-v1";
+const BAIT_INFO = "a09f-bait-v1";
 
 function b64urlEncode(bytes: Uint8Array): string {
   let s = "";
@@ -46,23 +48,24 @@ function b64urlEncode(bytes: Uint8Array): string {
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-// deriveReplyKeyPair deterministically derives the reply keypair for a bottle
-// from the identity private key: HKDF-SHA256(d || bottleId, "a09f-reply-v1")
-// -> P-256 scalar (rejection-sampled). No per-message key storage needed —
-// the private key is recomputed on demand from the master identity key.
-export async function deriveReplyKeyPair(
+// deriveScalarKeyPair deterministically derives a P-256 keypair from the
+// identity private key: HKDF-SHA256(d || salt, info:counter) -> scalar
+// (rejection-sampled). Shared by reply and bait keys — neither needs
+// per-message key storage; the private half is recomputed on demand.
+async function deriveScalarKeyPair(
   identityPrivateJwk: JWK,
-  bottleId: string
+  salt: string,
+  infoPrefix: string
 ): Promise<{ privateJwk: JWK; publicJwk: JWK }> {
   const dBytes = b64urlToBytes(identityPrivateJwk.d || "");
   const hkdf = await crypto.subtle.importKey("raw", dBytes, "HKDF", false, ["deriveBits"]);
-  const salt = textBytes(bottleId);
+  const saltBytes = textBytes(salt);
   let counter = 0;
   let priv: Uint8Array<ArrayBuffer>;
   for (;;) {
-    const info = textBytes(`${REPLY_INFO}:${counter}`);
+    const info = textBytes(`${infoPrefix}:${counter}`);
     const bits = await crypto.subtle.deriveBits(
-      { name: "HKDF", hash: "SHA-256", salt, info },
+      { name: "HKDF", hash: "SHA-256", salt: saltBytes, info },
       hkdf,
       256
     );
@@ -79,6 +82,26 @@ export async function deriveReplyKeyPair(
   };
   const privateJwk: JWK = { ...publicJwk, d: b64urlEncode(priv) };
   return { privateJwk, publicJwk };
+}
+
+// deriveReplyKeyPair derives the reply keypair for a bottle from the
+// identity private key: HKDF-SHA256(d || bottleId, "a09f-reply-v1").
+export async function deriveReplyKeyPair(
+  identityPrivateJwk: JWK,
+  bottleId: string
+): Promise<{ privateJwk: JWK; publicJwk: JWK }> {
+  return deriveScalarKeyPair(identityPrivateJwk, bottleId, REPLY_INFO);
+}
+
+// deriveBaitKeyPair derives the bait keypair for a pool slot from the
+// identity private key: HKDF-SHA256(d || "a09f-bait", "a09f-bait-v1:<seq>").
+// Bait pubkeys are therefore re-derivable from the identity alone — the
+// vault only needs to carry {kid, seq} metadata, never the private half.
+export async function deriveBaitKeyPair(
+  identityPrivateJwk: JWK,
+  seq: number
+): Promise<{ privateJwk: JWK; publicJwk: JWK }> {
+  return deriveScalarKeyPair(identityPrivateJwk, "a09f-bait", `${BAIT_INFO}:${seq}`);
 }
 
 export async function deriveWrapKey(

@@ -1,6 +1,7 @@
 import { api, API_BASE, getServerOffsetSec, noteServerTime } from "./api";
 export { getServerOffsetSec };
 import {
+  BAIT_PREFIX,
   BOTTLE_QUOTA,
   MAX_LOCAL_KEYS,
   MAX_THREAD_DEPTH,
@@ -9,6 +10,7 @@ import {
   decodePlaintext,
   decryptPayload,
   decryptSyncRecord,
+  deriveBaitKeyPair,
   derivePickupProof,
   deriveReplyKeyPair,
   encodePlaintext,
@@ -416,7 +418,33 @@ export async function generateAndDeposit(ttlRaw: string) {
     log(`pool key limit reached (${MAX_LOCAL_KEYS}); consumed keys free up slots`, "warn");
     return;
   }
-  const rec = await makeKeyRecord();
+  // Deterministic bait: derive the next slot's keypair from the identity
+  // private key (same pattern as reply keys) so the vault only needs the
+  // identity — {kid, seq} is enough to rebuild every bait keypair on
+  // import. Falls back to a random keypair before an identity exists.
+  const idt = await getIdentity().catch(() => null);
+  let rec: KeyRecord;
+  if (idt?.privateJwk && idt?.publicJwk) {
+    const uid = await deriveUserId(idt.publicJwk);
+    let seq = 0;
+    for (const k of state.keys) {
+      if (k.kid.startsWith(BAIT_PREFIX)) {
+        const n = Number(k.kid.split(":").pop());
+        if (Number.isFinite(n) && n >= seq) seq = n + 1;
+      }
+    }
+    const pair = await deriveBaitKeyPair(idt.privateJwk, seq);
+    rec = {
+      kid: `${BAIT_PREFIX}${uid}:${seq}`,
+      privateJwk: pair.privateJwk,
+      publicJwk: pair.publicJwk,
+      seq,
+      createdAt: Date.now(),
+      depositedAt: null,
+    };
+  } else {
+    rec = await makeKeyRecord();
+  }
   await idbPut(KEY_STORE, rec);
   await loadKeys();
   const n = await depositUndeposited(ttlRaw);
@@ -1959,9 +1987,15 @@ export async function vaultKeysPayload() {
   const replies = meta.filter(
     (m) => typeof m?.id === "string" && m.id.startsWith(REPLY_PREFIX) && m.privateJwk
   );
+  // Deterministic bait keys (kid = "bait:<uid>:<seq>") re-derive from the
+  // identity private key — the vault carries only {kid, seq} metadata for
+  // them. Random legacy keys still export their private JWK.
+  const legacyKeys = keys.filter((k) => !k.kid.startsWith(BAIT_PREFIX) || k.seq == null);
+  const baitKeys = keys.filter((k) => k.kid.startsWith(BAIT_PREFIX) && k.seq != null);
   return {
     version: 4,
-    keys: keys.map((k) => ({ kid: k.kid, jwk: k.privateJwk })),
+    keys: legacyKeys.map((k) => ({ kid: k.kid, jwk: k.privateJwk })),
+    bait: baitKeys.map((k) => ({ kid: k.kid, seq: k.seq })),
     identity: identity?.privateJwk || null,
     // username/userId ride along so an import restores the full profile —
     // without them the gate would force a re-claim (which the server
@@ -2045,7 +2079,9 @@ export async function exportVault() {
   const encrypted = await encryptVault(JSON.stringify(payload), passphrase);
   downloadJson("a09f-identity.json", encrypted);
   await idbPut(KV_STORE, { id: "vault:lastExport", ts: Date.now() }).catch(() => {});
-  log(`exported encrypted secret key with ${payload.keys.length} pool key(s)`);
+  log(
+    `exported encrypted secret key with ${payload.keys.length + (payload.bait?.length || 0)} pool key(s)`
+  );
 }
 
 // Vault backup reminder: without an export, losing the device means losing
@@ -2080,6 +2116,18 @@ export async function vaultReminderState(): Promise<VaultReminder> {
     stale &&
     !snoozed;
   return { due, lastExport };
+}
+
+// unexportedKeyCount reports how many local key records were created after
+// the last vault export (or ever, when no export exists). Switch identity
+// wipes them permanently, so the UI warns before logout when this is > 0.
+export async function unexportedKeyCount(): Promise<number> {
+  const [lastExport, keys] = await Promise.all([
+    kvTs("vault:lastExport"),
+    idbGetAll<KeyRecord>(KEY_STORE).catch(() => [] as KeyRecord[]),
+  ]);
+  if (!lastExport) return keys.length;
+  return keys.filter((k) => (k.createdAt || 0) > lastExport).length;
 }
 
 export async function snoozeVaultReminder() {
@@ -2119,6 +2167,7 @@ export async function importVaultFile(file: File) {
     identity?: JWK | null;
     identityMeta?: { username?: string; userId?: string } | null;
     replies?: { id?: string; jwk?: JWK }[];
+    bait?: { kid?: string; seq?: number }[];
     meta?: ThreadRecord[];
   };
   // Clean slate: wipe both stores before restoring so no stale keys,
@@ -2171,6 +2220,29 @@ export async function importVaultFile(file: File) {
         createdAt: Date.now(),
       });
       restored++;
+    }
+    // Deterministic bait: {kid, seq} only — re-derive the keypair from the
+    // imported identity. Requires payload.identity; without it these slots
+    // can't be rebuilt and are skipped.
+    if (payload.identity) {
+      for (const b of payload.bait || []) {
+        if (!b.kid || typeof b.seq !== "number") continue;
+        try {
+          const pair = await deriveBaitKeyPair(payload.identity, b.seq);
+          await idbPut(KEY_STORE, {
+            kid: b.kid,
+            privateJwk: pair.privateJwk,
+            publicJwk: pair.publicJwk,
+            seq: b.seq,
+            createdAt: Date.now(),
+            depositedAt: null,
+            status: "pending",
+          });
+          restored++;
+        } catch {
+          // derivation failure — skip this slot rather than losing the import
+        }
+      }
     }
   } else {
     // legacy vault shapes (v1–v3): keys carry full records, meta holds

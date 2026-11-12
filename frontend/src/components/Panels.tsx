@@ -22,6 +22,7 @@ import {
   restorePoolKeys,
   revokeDevice,
   unblockUser,
+  unexportedKeyCount,
 } from "../lib/store";
 import type { ClientMeta, DeviceInfo, PoolKeyStatus, UserStats } from "../lib/store";
 import { billingStatus, checkout, extendTrial, type Entitlement } from "../lib/billing";
@@ -341,13 +342,20 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
               className="retro-btn"
               title="wipe keys & messages on this device and sign in as someone else — your account stays claimable via secret key"
               onClick={() => {
-                if (
-                  !window.confirm(
-                    "switch identity? this wipes keys and messages on this device — export your secret key first if you want to keep them."
+                void (async () => {
+                  const unexported = await unexportedKeyCount().catch(() => 0);
+                  const warning =
+                    unexported > 0
+                      ? `\n\n⚠ ${unexported} key(s) were created AFTER your last export — they are in NO vault and will be lost forever.`
+                      : "";
+                  if (
+                    !window.confirm(
+                      `switch identity? this wipes keys and messages on this device — export your secret key first if you want to keep them.${warning}`
+                    )
                   )
-                )
-                  return;
-                logout().catch((e) => log(`logout: ${(e as Error).message}`, "err"));
+                    return;
+                  logout().catch((e) => log(`logout: ${(e as Error).message}`, "err"));
+                })();
               }}
             >
               ⇄ switch identity

@@ -10,6 +10,10 @@ export interface KeyRecord {
   kid: string;
   privateJwk: JWK;
   publicJwk: JWK;
+  // Deterministic bait keys (kid = "bait:<uid>:<seq>") carry their sequence
+  // number so the vault only needs {kid, seq} — the keypair re-derives from
+  // the identity private key on import.
+  seq?: number;
   createdAt: number;
   depositedAt: number | null;
   expiresAt?: number | null;
