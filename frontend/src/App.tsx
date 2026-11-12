@@ -238,7 +238,7 @@ export default function App() {
   const [replyToId, setReplyToId] = useState<string | null>(null);
   const replyTaRef = useRef<HTMLTextAreaElement | null>(null);
   const [logOpen, setLogOpen] = useState(false);
-  const [baitOpen, setBaitOpen] = useState(false);
+  const [castOpen, setCastOpen] = useState(false);
   const [baitTtl, setBaitTtl] = useState("86400");
   const [baitDialog, setBaitDialog] = useState(false);
   const [legal, setLegal] = useState<DocKind | null>(null);
@@ -285,12 +285,6 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity?.username]);
-
-  // Auto-expand the baits card while a server sync is in flight so the
-  // user sees live status instead of a collapsed strip.
-  useEffect(() => {
-    if (state.syncing) setBaitOpen(true);
-  }, [state.syncing]);
 
   // New-catch toast: an SSE bottle event means something landed on our
   // bait — flash a banner for a few seconds.
@@ -668,101 +662,6 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         </div>
       )}
 
-      {/* ── composer + bait line cards — home (thread list) only ── */}
-      {page === "catch" && !detailNode && (
-      <div className="flex flex-wrap gap-2">
-      <div className="bevel flex min-w-[18rem] flex-1 flex-col">
-        <div className="retro-titlebar">
-          <span>🎣 cast into the sea</span>
-            <span className="text-[12px]">sealed with AES-256-GCM</span>
-          </div>
-          <div className="flex flex-1 bg-[#c0c0c0] p-2">
-            <div className="flex flex-1 gap-2">
-              <textarea
-                className="retro-input retro-msg h-full w-full resize-none"
-                rows={2}
-                placeholder="write something for the sea…"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    run(async () => {
-                      await dropBottle(message, "86400");
-                      setMessage("");
-                    });
-                  }
-                }}
-              />
-              <button
-                className="retro-btn retro-cast"
-                disabled={busy}
-                onClick={() =>
-                  run(async () => {
-                    await dropBottle(message, "86400");
-                    setMessage("");
-                  })
-                }
-              >
-                🎣<br />
-                cast it
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* bait line card — right of composer, wraps below on narrow screens */}
-        <div className="bevel w-full shrink-0 md:w-fit md:max-w-[30rem]">
-          <div className="retro-titlebar">
-            <span style={{ color: "#ffd75e" }}>
-              🎣 {activeBaits} bait{activeBaits === 1 ? "" : "s"} active
-            </span>
-            <span className="flex items-center gap-1 text-[12px]">
-              <button
-                className="retro-btn retro-btn-sm"
-                onClick={() => {
-                  setBaitOpen(true);
-                  openBaitDialog();
-                }}
-                title="throw more bait"
-              >
-                + throw
-              </button>
-              <button
-                className="retro-btn retro-btn-sm"
-                onClick={() => setBaitOpen((v) => !v)}
-              >
-                {baitOpen ? "hide" : "show"}
-              </button>
-            </span>
-          </div>
-          <div className={`retro-body ${baitOpen ? "block" : "hidden"} md:block`}>
-            <div className="mb-1 text-[11px] italic text-neutral-700">
-              🎣 waiting · 😋 eaten · 🫥 lost · ❗ unread
-            </div>
-            <BaitLine
-              onOpen={(bottleId) => {
-                setPage("catch");
-                loadThread(bottleId);
-                setDetailPath([bottleId]);
-              }}
-              extra={
-                <button
-                  type="button"
-                  className="bait-slot bait-new"
-                  title="throw more bait — publish a fresh keypair into the pool"
-                  onClick={openBaitDialog}
-                >
-                  <span className="bait-emoji">🎣</span>
-                  <span className="bait-status">+ throw</span>
-                </button>
-              }
-            />
-          </div>
-        </div>
-      </div>
-      )}
-
       {state.deviceRevoked && (
         <div className="flex flex-wrap items-center gap-2 border-2 border-red-700 bg-red-100 px-2 py-1 text-[13px] text-red-900">
           <span>
@@ -779,11 +678,11 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
       )}
 
       {/* ── workspace: thread sidebar + chat pane ──────────── */}
-      <div className="flex min-h-0 flex-1 gap-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 xl:flex-row">
         {/* left: thread list */}
         <aside
-          className={`bevel w-full shrink-0 flex-col md:w-[20rem] ${
-            page !== "catch" ? "hidden" : detailNode ? "hidden md:flex" : "flex"
+          className={`bevel w-full min-h-0 flex-1 flex-col xl:w-[20rem] xl:flex-none ${
+            page !== "catch" ? "hidden" : detailNode ? "hidden xl:flex" : "flex"
           }`}
         >
           <div className="retro-titlebar">
@@ -988,7 +887,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         <section
           className={`bevel min-w-0 flex-1 flex-col ${
             page === "catch" && !detailNode ? "hidden" : "flex"
-          } md:flex`}
+          } xl:flex`}
         >
           {page === "catch" && (
           <div className="retro-titlebar">
@@ -1155,7 +1054,150 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             </div>
           )}
         </section>
+
+        {/* right rail — bait card + composer (desktop); mobile gets the
+            bait card here and the composer as a fullscreen dialog */}
+        {page === "catch" && (
+        <div className="order-first flex w-full shrink-0 flex-col gap-2 xl:order-none xl:w-[19rem]">
+          <div className="flex gap-2">
+          {/* bait line card */}
+          <div className="bevel min-w-0 flex-1">
+            <div className="retro-titlebar">
+              <span style={{ color: "#ffd75e" }}>
+                🎣 {activeBaits} bait{activeBaits === 1 ? "" : "s"} active
+              </span>
+              <span className="flex items-center gap-1 text-[12px]">
+                <button
+                  className="retro-btn retro-btn-sm"
+                  onClick={openBaitDialog}
+                  title="throw more bait"
+                >
+                  + throw
+                </button>
+
+              </span>
+            </div>
+            <div className="retro-body">
+              <div className="mb-1 hidden text-[11px] italic text-neutral-700 xl:block">
+                🎣 waiting · 😋 eaten · 🫥 lost · ❗ unread
+              </div>
+              <BaitLine
+                onOpen={(bottleId) => {
+                  setPage("catch");
+                  loadThread(bottleId);
+                  setDetailPath([bottleId]);
+                }}
+                extra={
+                  <button
+                    type="button"
+                    className="bait-slot bait-new"
+                    title="throw more bait — publish a fresh keypair into the pool"
+                    onClick={openBaitDialog}
+                  >
+                    <span className="bait-emoji">🎣</span>
+                    <span className="bait-status">+ throw</span>
+                  </button>
+                }
+              />
+            </div>
+          </div>
+          {/* big cast button — mobile only, opens the fullscreen dialog */}
+          <button
+            className="retro-btn retro-cast aspect-square shrink-0 self-stretch xl:hidden"
+            title="cast into the sea"
+            onClick={() => setCastOpen(true)}
+          >
+            <span className="text-4xl">💬</span><br />
+            <span className="text-lg font-bold">+ cast</span>
+          </button>
+          </div>
+
+          {/* composer — desktop rail only; mobile uses the cast dialog */}
+          <div className="bevel hidden min-h-0 flex-1 flex-col xl:flex">
+            <div className="retro-titlebar">
+              <span>🎣 cast</span>
+              <span className="text-[12px]">sealed with AES-256-GCM</span>
+            </div>
+            <div className="flex flex-1 flex-col gap-2 bg-[#c0c0c0] p-2">
+              <textarea
+                className="retro-input retro-msg h-full w-full flex-1 resize-none"
+                placeholder="write something for the sea…"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    run(async () => {
+                      await dropBottle(message, "86400");
+                      setMessage("");
+                    });
+                  }
+                }}
+              />
+              <button
+                className="retro-btn retro-cast"
+                disabled={busy}
+                onClick={() =>
+                  run(async () => {
+                    await dropBottle(message, "86400");
+                    setMessage("");
+                  })
+                }
+              >
+                🎣<br />
+                cast it
+              </button>
+            </div>
+          </div>
+        </div>
+        )}
       </div>
+
+      {/* ── cast dialog — mobile fullscreen composer ────────── */}
+      {castOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[#c0c0c0]">
+          <div className="retro-titlebar">
+            <span>🎣 cast</span>
+            <span className="flex items-center gap-2 text-[12px]">
+              <span>sealed with AES-256-GCM</span>
+              <button className="retro-btn" style={{ padding: "0 6px" }} onClick={() => setCastOpen(false)}>✕</button>
+            </span>
+          </div>
+          <div className="flex flex-1 flex-col gap-2 bg-[#c0c0c0] p-2">
+            <textarea
+              className="retro-input retro-msg h-full w-full flex-1 resize-none"
+              placeholder="write something for the sea…"
+              value={message}
+              autoFocus
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  run(async () => {
+                    await dropBottle(message, "86400");
+                    setMessage("");
+                    setCastOpen(false);
+                  });
+                }
+              }}
+            />
+            <button
+              className="retro-btn retro-cast"
+              disabled={busy}
+              onClick={() =>
+                run(async () => {
+                  await dropBottle(message, "86400");
+                  setMessage("");
+                  setCastOpen(false);
+                })
+              }
+            >
+              🎣<br />
+              cast it
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── throw bait dialog ──────────────────────────────── */}
       {baitDialog && (
@@ -1217,7 +1259,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
       {/* ── terms & privacy ────────────────────────────────── */}
       {legal && <DocModal kind={legal} onClose={() => setLegal(null)} />}
 
-      <p className="mt-3 hidden text-center text-[13px] text-neutral-600 md:block">
+      <p className="mt-3 hidden text-center text-[13px] text-neutral-600 xl:block">
         a09f · best viewed at 800×600 · works in netscape navigator · no cookies were harmed
         {" · "}
         <span className="retro-link" onClick={() => setLegal("how")}>how it works</span>
@@ -1226,7 +1268,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
         {" · "}
         <span className="retro-link" onClick={() => setLegal("privacy")}>privacy</span>
       </p>
-      <p className="mt-1 hidden text-center text-[12px] text-neutral-500 md:block">
+      <p className="mt-1 hidden text-center text-[12px] text-neutral-500 xl:block">
         your IP is visible to the relay — use{" "}
         <a
           className="retro-link"
