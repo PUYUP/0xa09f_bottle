@@ -811,7 +811,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                       ● new
                     </span>
                   )}
-                  {isSent && bottleId && (
+                  {isSentRoot && bottleId && (
                     <button
                       className="retro-btn retro-btn-sm ml-2"
                       style={{ color: "#a00" }}
