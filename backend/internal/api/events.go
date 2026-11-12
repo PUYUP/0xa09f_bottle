@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -105,6 +106,29 @@ func (s *Server) streamEvents(c fiber.Ctx) error {
 	for _, k := range tokenKids {
 		kids[k] = struct{}{}
 	}
+	// Device revocation: the pop token proves key possession but says
+	// nothing about which install holds it. Clients that send ?device=
+	// get cut off — checked once here and re-checked on every ping tick,
+	// so a revoke lands within ~25s even on an idle stream.
+	var revUID, revDev string
+	for _, k := range tokenKids {
+		if uid, ok := strings.CutPrefix(k, "self:"); ok {
+			revUID = uid
+			break
+		}
+	}
+	revDev = c.Query("device")
+	deviceRevoked := func() bool {
+		if s.pg == nil || revUID == "" || revDev == "" || len(revDev) > 128 {
+			return false
+		}
+		revoked, err := s.pg.DeviceRevoked(c.Context(), revUID, revDev)
+		return err == nil && revoked
+	}
+	if deviceRevoked() {
+		return fiber.NewError(fiber.StatusUnauthorized, "device revoked")
+	}
+
 	sub := s.events.subscribe(kids)
 	log.Printf("sse subscribe kids=%d totalSubs=%d", len(kids), s.events.subCount())
 
@@ -132,6 +156,13 @@ func (s *Server) streamEvents(c fiber.Ctx) error {
 				fmt.Fprintf(w, "event: bottle\ndata: %s\n\n", data)
 				w.Flush()
 			case <-ticker.C:
+				if deviceRevoked() {
+					// Tell the client to wipe itself before closing —
+					// honest clients self-destruct on this event.
+					fmt.Fprint(w, "event: revoked\ndata: {}\n\n")
+					w.Flush()
+					return
+				}
 				fmt.Fprint(w, ": ping\n\n")
 				w.Flush()
 			}

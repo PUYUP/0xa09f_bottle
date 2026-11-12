@@ -58,6 +58,9 @@ export async function api<T = unknown>(
     }
   }
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("a09f:unauthorized"));
+    }
     const d = data as { error?: string; raw?: string } | null;
     throw new ApiError(d?.error || d?.raw || `http ${res.status}`, res.status, data);
   }

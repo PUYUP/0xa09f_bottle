@@ -154,7 +154,7 @@ let deviceIdCache: string | null = null;
 // on authenticated requests. The server uses it for the device list and
 // session revocation; it is not a secret and reveals nothing beyond "this
 // install".
-async function getDeviceId(): Promise<string> {
+export async function getDeviceId(): Promise<string> {
   if (deviceIdCache) return deviceIdCache;
   const rec = await idbGet<{ v?: string }>(KV_STORE, "device:id").catch(() => null);
   if (rec?.v) {

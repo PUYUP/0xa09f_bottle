@@ -226,6 +226,16 @@ func (s *Server) popToken(c fiber.Ctx) error {
 			if err := s.store.PopSetPut(c.Context(), bindUID, final); err != nil {
 				log.Printf("pop set put %s: %v", bindUID, err)
 			}
+			// Device revocation reaches the PoP layer too: a revoked
+			// install still holds the private keys, so kid proofs alone
+			// can't cut it off — the X-Device-Id header (sent on every
+			// api() call) is the binding. Old clients without the header
+			// skip the check, same as authUser.
+			if deviceID := c.Get("X-Device-Id"); deviceID != "" && len(deviceID) <= 128 {
+				if revoked, err := s.pg.DeviceRevoked(c.Context(), bindUID, deviceID); err == nil && revoked {
+					return fiber.NewError(fiber.StatusUnauthorized, "device revoked")
+				}
+			}
 		}
 	}
 

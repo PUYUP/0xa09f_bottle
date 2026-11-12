@@ -331,6 +331,19 @@ FROM user_devices WHERE user_id = $1 ORDER BY last_seen DESC`, userID)
 	return out, rows.Err()
 }
 
+// DeviceRevoked reports whether the device is flagged revoked, without
+// recording a sighting. Missing rows mean "never seen" → not revoked.
+func (p *PGStore) DeviceRevoked(ctx context.Context, userID, deviceID string) (bool, error) {
+	var revoked bool
+	err := p.pool.QueryRow(ctx,
+		`SELECT revoked FROM user_devices WHERE user_id = $1 AND device_id = $2`,
+		userID, deviceID).Scan(&revoked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return revoked, err
+}
+
 // RevokeDevice marks a device as revoked — subsequent requests carrying its
 // X-Device-Id fail authentication even with a valid identity proof.
 func (p *PGStore) RevokeDevice(ctx context.Context, userID, deviceID string) error {

@@ -14,6 +14,7 @@ import {
   getServerOffsetSec,
   init,
   log,
+  logout,
   openThread,
   readTTLSeconds,
   replyBottle,
@@ -718,7 +719,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             </span>
             <span className="flex items-center gap-1 text-[12px]">
               <button
-                className="retro-btn retro-btn-sm md:hidden"
+                className="retro-btn retro-btn-sm"
                 onClick={() => {
                   setBaitOpen(true);
                   openBaitDialog();
@@ -728,7 +729,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                 + throw
               </button>
               <button
-                className="retro-btn retro-btn-sm md:hidden"
+                className="retro-btn retro-btn-sm"
                 onClick={() => setBaitOpen((v) => !v)}
               >
                 {baitOpen ? "hide" : "show"}
@@ -760,6 +761,21 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
           </div>
         </div>
       </div>
+      )}
+
+      {state.deviceRevoked && (
+        <div className="flex flex-wrap items-center gap-2 border-2 border-red-700 bg-red-100 px-2 py-1 text-[13px] text-red-900">
+          <span>
+            ⛔ this device was revoked — it can no longer fetch new messages.
+            Local data remains until wiped.
+          </span>
+          <button
+            className="retro-btn retro-btn-sm"
+            onClick={() => run(() => logout())}
+          >
+            wipe local data
+          </button>
+        </div>
       )}
 
       {/* ── workspace: thread sidebar + chat pane ──────────── */}
@@ -924,21 +940,21 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
               </>
             )}
           </div>
-          {/* system log pinned to the bottom of the sidebar — collapsed on mobile until tapped */}
+          {/* system log pinned to the bottom of the sidebar — collapsed until tapped */}
           <div className="shrink-0 border-t-2 border-[#808080]">
             <div className="retro-titlebar">
               <span>📟 system log</span>
               <span className="flex items-center gap-2 text-[12px]">
                 <button
-                  className="retro-btn retro-btn-sm md:hidden"
+                  className="retro-btn retro-btn-sm"
                   onClick={() => setLogOpen((v) => !v)}
                 >
                   {logOpen ? "hide" : "show"}
                 </button>
-                <span className="hidden md:inline">debug console</span>
+                <span className="hidden text-neutral-300 md:inline">debug console</span>
               </span>
             </div>
-            <div className={`max-h-32 overflow-y-auto bg-white px-2 py-1 font-mono text-[12px] leading-tight ${logOpen ? "block" : "hidden"} md:block`}>
+            <div className={`max-h-32 overflow-y-auto bg-white px-2 py-1 font-mono text-[12px] leading-tight ${logOpen ? "block" : "hidden"}`}>
               {state.logs.map((l) => (
                 <div
                   key={l.id}

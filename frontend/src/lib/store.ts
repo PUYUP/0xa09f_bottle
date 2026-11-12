@@ -19,7 +19,7 @@ import {
   wrapSessionKey,
 } from "./crypto";
 import { idbClear, idbDelete, idbGet, idbGetAll, idbPut, KEY_STORE, KV_STORE, META_STORE } from "./idb";
-import { claimUsername, computeProof, deriveUserId, fetchNonce, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
+import { claimUsername, computeProof, deriveUserId, fetchNonce, getDeviceId, getIdentity, getIdentityRecord, getServerPub, kidProofDigest, resetIdentityCache } from "./identity";
 import type {
   BlockEntry,
   Bottle,
@@ -56,6 +56,9 @@ export interface AppState {
   // true while a post-import content sync (inbox scan + thread activity)
   // is pulling server-side messages down — drives the loading indicator.
   syncing: boolean;
+  // set when any authed API call returns 401 — device revoked or proof
+  // rejected; drives the warning banner.
+  deviceRevoked: boolean;
 }
 
 let state: AppState = {
@@ -70,6 +73,7 @@ let state: AppState = {
   logs: [],
   lastCatchAt: 0,
   syncing: false,
+  deviceRevoked: false,
 };
 
 const listeners = new Set<() => void>();
@@ -1582,6 +1586,14 @@ function playNotifySound() {
 }
 
 let eventsSource: EventSource | null = null;
+
+// api() broadcasts 401s here; a revoked device can't mint pop tokens, so
+// its SSE will also die — this flag just makes the state visible.
+if (typeof window !== "undefined") {
+  window.addEventListener("a09f:unauthorized", () => {
+    setState({ deviceRevoked: true });
+  });
+}
 // eventsKidsKey tracks the kid set of the LIVE subscription — the server
 // fixes it at subscribe time, so a new token with the same kids does not
 // need a reconnect. lastSseOpenAt forces a refresh before token expiry
@@ -1632,7 +1644,11 @@ export async function connectEvents() {
   eventsPending = true;
   try {
     const token = kidsParam ? await popTokenFor(kidsParam.split(",")).catch(() => null) : null;
-    const url = token ? `${API_BASE}/api/events?token=${encodeURIComponent(token)}` : "";
+    // EventSource can't send headers — the install id rides as a query
+    // param so the server can enforce device revocation on the stream.
+    const deviceId = await getDeviceId().catch(() => "");
+    const devParam = deviceId ? `&device=${encodeURIComponent(deviceId)}` : "";
+    const url = token ? `${API_BASE}/api/events?token=${encodeURIComponent(token)}${devParam}` : "";
     if (!url) {
       eventsSource?.close();
       eventsSource = null;
@@ -1652,6 +1668,13 @@ export async function connectEvents() {
         prev?.close();
         console.log("[sse] connected");
       };
+      es.addEventListener("revoked", () => {
+        // Server confirmed this install is revoked — cooperate by
+        // wiping local identity data (logout also releases pool bait;
+        // its API call will 401, which is fine, the wipe still runs).
+        console.log("[sse] device revoked — wiping local data");
+        void logout().catch(() => window.location.reload());
+      });
       es.addEventListener("bottle", (ev) => {
         // Payload is {"id","deleted","parentId","rootId"}; deletions mark
         // local records as placeholders instead of waiting for a scan
