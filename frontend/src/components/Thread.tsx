@@ -1,21 +1,20 @@
-import { useState } from "react";
 import type { ThreadNode } from "../lib/store";
 import { MAX_THREAD_DEPTH } from "../lib/crypto";
-import { deleteBottle, replyBottle, reportBottle } from "../lib/store";
+import { deleteBottle, reportBottle } from "../lib/store";
 import { useApp } from "../hooks/useApp";
 
 function MessageNode({
   node,
   sentIds,
   onOpen,
+  onReply,
 }: {
   node: ThreadNode;
   sentIds: Set<string>;
   onOpen?: (node: ThreadNode) => void;
+  onReply?: (node: ThreadNode) => void;
 }) {
   const { bottle, plain, kid, claim } = node.rec;
-  const [replying, setReplying] = useState(false);
-  const [replyText, setReplyText] = useState("");
   const deleted = !!node.rec.deleted;
   const depth = bottle!.depth || 1;
   const isReply = !!bottle!.parentId;
@@ -67,67 +66,18 @@ function MessageNode({
             ! report
           </button>
         )}
-        {!isSent && canReply && !replying && (
+        {!isSent && canReply && onReply && (
           <button
             className="retro-btn retro-btn-sm"
             onClick={(e) => {
               e.stopPropagation();
-              setReplying(true);
+              onReply(node);
             }}
           >
             ↩ reply
           </button>
         )}
       </div>
-      )}
-      {!deleted && replying && (
-        <div className="mt-2" onClick={(e) => e.stopPropagation()}>
-          <textarea
-            className="retro-input w-full resize-none"
-            rows={3}
-            placeholder="write your reply…"
-            value={replyText}
-            autoFocus
-            onChange={(e) => setReplyText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                const t = replyText.trim();
-                if (!t) return;
-                setReplying(false);
-                setReplyText("");
-                replyBottle(node.rec, t).catch((err) => console.error(err));
-              }
-              if (e.key === "Escape") {
-                setReplying(false);
-                setReplyText("");
-              }
-            }}
-          />
-          <div className="mt-1 flex gap-2 text-[13px]">
-            <button
-              className="retro-btn retro-btn-sm"
-              onClick={() => {
-                const t = replyText.trim();
-                if (!t) return;
-                setReplying(false);
-                setReplyText("");
-                replyBottle(node.rec, t).catch((err) => console.error(err));
-              }}
-            >
-              send
-            </button>
-            <button
-              className="retro-btn retro-btn-sm"
-              onClick={() => {
-                setReplying(false);
-                setReplyText("");
-              }}
-            >
-              cancel
-            </button>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -150,9 +100,11 @@ function bottleTimeSec(rec: ThreadNode["rec"]): number {
 export function FlatThread({
   root,
   onOpen,
+  onReply,
 }: {
   root: ThreadNode;
   onOpen?: (node: ThreadNode) => void;
+  onReply?: (node: ThreadNode) => void;
 }) {
   const { records } = useApp();
   const sentIds = new Set(
@@ -170,7 +122,7 @@ export function FlatThread({
         total messages: {nodes.length}
       </div>
       {nodes.map((n) => (
-        <MessageNode key={n.rec.id} node={n} sentIds={sentIds} onOpen={onOpen} />
+        <MessageNode key={n.rec.id} node={n} sentIds={sentIds} onOpen={onOpen} onReply={onReply} />
       ))}
     </div>
   );

@@ -234,6 +234,8 @@ export default function App() {
   const state = useApp();
   const [message, setMessage] = useState("");
   const [replyDraft, setReplyDraft] = useState("");
+  const [replyToId, setReplyToId] = useState<string | null>(null);
+  const replyTaRef = useRef<HTMLTextAreaElement | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [baitOpen, setBaitOpen] = useState(false);
   const [baitTtl, setBaitTtl] = useState("86400");
@@ -301,6 +303,10 @@ export default function App() {
   // Scroll to the newest reply and flash it when a thread detail opens.
   // openThread fetches async, so poll briefly until the node exists.
   const scrolledThreadRef = useRef("");
+  useEffect(() => {
+    setReplyToId(null);
+  }, [detailPath.join("/")]);
+
   useEffect(() => {
     const key = detailPath.join("/");
     if (!detailPath.length || scrolledThreadRef.current === key) return;
@@ -427,17 +433,51 @@ function scrollToMsg(bottleId: string) {
     ?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
+// latestReplyNode finds the most recent decrypted reply inside a thread —
+// the list preview shows it instead of the root so the list reflects the
+// latest activity, WhatsApp-style.
+function latestReplyNode(root: ThreadNode): ThreadNode | null {
+  let best: ThreadNode | null = null;
+  let bestTs = -1;
+  for (const n of collectNodes(root)) {
+    if (n === root || n.rec.deleted || !n.rec.plain?.text) continue;
+    const c = n.rec.bottle?.createdAt || 0;
+    const ts = c > 1e11 ? Math.floor(c / 1000) : c;
+    if (ts >= bestTs) {
+      bestTs = ts;
+      best = n;
+    }
+  }
+  return best;
+}
+
+function nodeTimeSec(n: ThreadNode): number {
+  const c = n.rec.bottle?.createdAt || 0;
+  return c > 1e11 ? Math.floor(c / 1000) : c;
+}
+
+function replyableNode(n: ThreadNode): boolean {
+  const r = n.rec;
+  return (
+    r.claim?.status !== "SENT" &&
+    !r.deleted &&
+    !!r.plain?.reply &&
+    (r.bottle?.depth || 1) < MAX_THREAD_DEPTH
+  );
+}
+
 function lastReplyable(root: ThreadNode): ThreadNode | null {
-  const nodes = collectNodes(root);
+  // Same ordering as FlatThread (depth, then time) so "last" means the
+  // chronologically newest replyable message — replies from us are
+  // skipped, landing on the counterpart's latest message.
+  const nodes = collectNodes(root).sort((a, b) => {
+    const da = a.rec.bottle?.depth || 1;
+    const db = b.rec.bottle?.depth || 1;
+    if (da !== db) return da - db;
+    return nodeTimeSec(a) - nodeTimeSec(b);
+  });
   for (let i = nodes.length - 1; i >= 0; i--) {
-    const r = nodes[i].rec;
-    if (
-      r.claim?.status !== "SENT" &&
-      !r.deleted &&
-      !!r.plain?.reply &&
-      (r.bottle?.depth || 1) < MAX_THREAD_DEPTH
-    )
-      return nodes[i];
+    if (replyableNode(nodes[i])) return nodes[i];
   }
   return null;
 }
@@ -449,11 +489,25 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
     (k) => state.ownPoolKids.has(k.kid) || k.status === "active"
   ).length;
 
-  const replyTarget = detailNode ? lastReplyable(detailNode) : null;
+  // replyToId: explicit target picked via a message's ↩ reply button;
+  // otherwise fall back to the newest replyable incoming message.
+  const replyOverride = replyToId ? findNode(threads, replyToId) : null;
+  const replyTarget = detailNode
+    ? (replyOverride && replyableNode(replyOverride)
+        ? replyOverride
+        : lastReplyable(detailNode))
+    : null;
+  const pickReplyTarget = (n: ThreadNode) => {
+    const id = n.rec.bottle?.id;
+    if (!id) return;
+    setReplyToId(id);
+    setTimeout(() => replyTaRef.current?.focus(), 0);
+  };
   const sendReply = () => {
     const t = replyDraft.trim();
     if (!t || !replyTarget) return;
     setReplyDraft("");
+    setReplyToId(null);
     run(async () => {
       await replyBottle(replyTarget.rec, t);
     });
@@ -745,6 +799,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                   </div>
                 )}
           {threads.slice(0, threadLimit).map((r) => {
+            const latestReply = latestReplyNode(r);
             // List shows badge only — reply counts live inside the thread
             // detail, so no need to track locally-readable descendants here.
             const isSent = r.rec.claim?.status === "SENT";
@@ -839,8 +894,16 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                     </button>
                   )}
                 </div>
-                {r.rec.deleted ? (
+                {r.rec.deleted && !latestReply ? (
                   <p className="text-[15px] italic text-neutral-500">[this message was deleted]</p>
+                ) : latestReply ? (
+                  <p className="whitespace-pre-wrap text-[16px] leading-relaxed">
+                    <span className="text-neutral-500">↩ </span>
+                    {latestReply.rec.claim?.status === "SENT" && (
+                      <span className="text-neutral-500">you: </span>
+                    )}
+                    {latestReply.rec.plain?.text}
+                  </p>
                 ) : (
                   <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{r.rec.plain?.text}</p>
                 )}
@@ -1000,6 +1063,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                 </div>
                 <FlatThread
                   root={detailNode}
+                  onReply={pickReplyTarget}
                   onOpen={(n) => {
                     const id = n.rec.bottle?.id;
                     if (!id) return;
@@ -1019,13 +1083,13 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                 <span>💬 reply</span>
                 <span className="flex items-center gap-2 text-[12px]">
                   to #{(detailNode.rec.bottle?.id || "").slice(0, 8)}
-                  {replyTarget?.rec.bottle?.parentId && (
+                  {replyTarget?.rec.bottle?.id && (
                     <button
                       className="underline decoration-dotted underline-offset-2 hover:text-white"
-                      title={`jump to parent #${replyTarget.rec.bottle.parentId.slice(0, 8)}`}
-                      onClick={() => scrollToMsg(replyTarget.rec.bottle!.parentId!)}
+                      title={`jump to #${replyTarget.rec.bottle.id.slice(0, 8)}`}
+                      onClick={() => scrollToMsg(replyTarget.rec.bottle!.id!)}
                     >
-                      ↩ reply to #{replyTarget.rec.bottle.parentId.slice(0, 8)}
+                      ↩ reply to #{replyTarget.rec.bottle.id.slice(0, 8)}
                     </button>
                   )}
                 </span>
@@ -1033,6 +1097,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
               <div className="bg-[#c0c0c0] p-2">
                 <div className="flex gap-2">
                   <textarea
+                    ref={replyTaRef}
                     className="retro-input retro-msg w-full resize-none"
                     rows={2}
                     placeholder={
