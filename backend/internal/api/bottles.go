@@ -450,8 +450,9 @@ func (s *Server) listThreadStats(c fiber.Ctx) error {
 	// Per-root stats are cached ("tstat:<root>") and explicitly invalidated
 	// on thread writes — one MGet covers the whole request.
 	type rootStat struct {
-		Count  int64 `json:"count"`
-		LastAt int64 `json:"lastAt"`
+		Count   int64  `json:"count"`
+		LastAt  int64  `json:"lastAt"`
+		ReplyID string `json:"replyId"`
 	}
 	out := fiber.Map{}
 	missRoots := roots
@@ -465,7 +466,7 @@ func (s *Server) listThreadStats(c fiber.Ctx) error {
 		for i, raw := range raws {
 			var st rootStat
 			if raw != nil && json.Unmarshal(raw, &st) == nil {
-				out[roots[i]] = fiber.Map{"count": st.Count, "lastAt": st.LastAt}
+				out[roots[i]] = fiber.Map{"count": st.Count, "lastAt": st.LastAt, "lastReplyId": st.ReplyID}
 			} else {
 				missRoots = append(missRoots, roots[i])
 			}
@@ -476,9 +477,9 @@ func (s *Server) listThreadStats(c fiber.Ctx) error {
 			log.Printf("pg bulk thread stats: %v", err)
 		} else {
 			for id, st := range stats {
-				out[id] = fiber.Map{"count": st[0], "lastAt": st[1]}
+				out[id] = fiber.Map{"count": st.Count, "lastAt": st.LastAt, "lastReplyId": st.LastReplyID}
 				if s.cache != nil {
-					s.cache.SetJSON(c.Context(), "tstat:"+id, rootStat{Count: st[0], LastAt: st[1]}, 30*time.Second)
+					s.cache.SetJSON(c.Context(), "tstat:"+id, rootStat{Count: st.Count, LastAt: st.LastAt, ReplyID: st.LastReplyID}, 30*time.Second)
 				}
 			}
 		}
@@ -620,8 +621,8 @@ func (s *Server) listBottlesByKids(c fiber.Ctx, limit int, beforeCreatedAt int64
 						key = bottles[i].ID
 					}
 					if st, ok := tstats[key]; ok {
-						bottles[i].ThreadCount = int(st[0])
-						bottles[i].ThreadLastAt = st[1]
+						bottles[i].ThreadCount = int(st.Count)
+						bottles[i].ThreadLastAt = st.LastAt
 					}
 				}
 			}

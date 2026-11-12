@@ -815,7 +815,18 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                   </div>
                 )}
           {threads.slice(0, threadLimit).map((r) => {
-            const latestReply = latestReplyNode(r);
+            // Denormalized preview on the root record (filled at decrypt
+            // time); fall back to walking the subtree for records that
+            // predate the fields.
+            const lr = r.rec;
+            const latestReply = lr.latestReply
+              ? { text: lr.latestReply.text, sent: lr.latestReply.sent }
+              : (() => {
+                  const n = latestReplyNode(r);
+                  return n?.rec.plain?.text != null
+                    ? { text: n.rec.plain.text, sent: n.rec.claim?.status === "SENT" }
+                    : null;
+                })();
             // List shows badge only — reply counts live inside the thread
             // detail, so no need to track locally-readable descendants here.
             const isSent = r.rec.claim?.status === "SENT";
@@ -915,10 +926,10 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                 ) : latestReply ? (
                   <p className="whitespace-pre-wrap text-[16px] leading-relaxed">
                     <span className="text-neutral-500">↩ </span>
-                    {latestReply.rec.claim?.status === "SENT" && (
+                    {latestReply.sent && (
                       <span className="text-neutral-500">you: </span>
                     )}
-                    {latestReply.rec.plain?.text}
+                    {latestReply.text}
                   </p>
                 ) : (
                   <p className="whitespace-pre-wrap text-[16px] leading-relaxed">{r.rec.plain?.text}</p>

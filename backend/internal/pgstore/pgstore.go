@@ -50,6 +50,20 @@ FROM (
 ) s
 WHERE r.id = s.tk AND (r.thread_replies <> s.cnt OR r.thread_last_at <> s.lastat);
 
+-- Latest reply id on the thread-key row — lets stats/list responses point
+-- at the newest reply without scanning the subtree. Content stays
+-- ciphertext-only; this is metadata like the counters above.
+ALTER TABLE bottles ADD COLUMN IF NOT EXISTS thread_last_reply_id TEXT NOT NULL DEFAULT '';
+UPDATE bottles r SET thread_last_reply_id = s.rid
+FROM (
+  SELECT DISTINCT ON (COALESCE(NULLIF(root_id, ''), parent_id))
+         COALESCE(NULLIF(root_id, ''), parent_id) AS tk, id AS rid
+  FROM bottles
+  WHERE parent_id <> '' AND status <> 'DELETED'
+  ORDER BY 1, created_at DESC, id DESC
+) s
+WHERE r.id = s.tk AND r.thread_last_reply_id <> s.rid;
+
 -- One row per envelope kid: the index behind "bottles involving me"
 -- queries (recipient pool kids, self:<userId> sender marker, reply:<id>).
 CREATE TABLE IF NOT EXISTS bottle_kids (
@@ -322,8 +336,11 @@ func (p *PGStore) SaveBottle(ctx context.Context, b store.Bottle) error {
 		}
 		if isNewReply {
 			if _, err := tx.Exec(ctx, `
-UPDATE bottles SET thread_replies = thread_replies + 1, thread_last_at = GREATEST(thread_last_at, $2)
-WHERE id = $1`, tk, b.CreatedAt); err != nil {
+UPDATE bottles SET
+  thread_replies = thread_replies + 1,
+  thread_last_at = GREATEST(thread_last_at, $2),
+  thread_last_reply_id = CASE WHEN $2 >= thread_last_at THEN $3 ELSE thread_last_reply_id END
+WHERE id = $1`, tk, b.CreatedAt, b.ID); err != nil {
 				return err
 			}
 		}
@@ -833,7 +850,13 @@ UPDATE bottles t SET
     SELECT MAX(c.created_at) FROM bottles c
     WHERE c.parent_id <> '' AND c.status <> 'DELETED'
       AND COALESCE(NULLIF(c.root_id, ''), c.parent_id) = t.id
-  ), 0)
+  ), 0),
+  thread_last_reply_id = COALESCE((
+    SELECT c.id FROM bottles c
+    WHERE c.parent_id <> '' AND c.status <> 'DELETED'
+      AND COALESCE(NULLIF(c.root_id, ''), c.parent_id) = t.id
+    ORDER BY c.created_at DESC, c.id DESC LIMIT 1
+  ), '')
 WHERE t.id = $1`, tk); err != nil {
 			return false, err
 		}
@@ -934,24 +957,32 @@ GROUP BY parent_id`, ids)
 // ThreadStats returns per-thread reply aggregates keyed by the thread's root
 // bottle id, read from the materialized counters maintained by SaveBottle —
 // O(threads) index lookups instead of scanning every reply in the corpus.
-func (p *PGStore) ThreadStats(ctx context.Context, rootIDs []string) (map[string][2]int64, error) {
-	out := make(map[string][2]int64, len(rootIDs))
+// ThreadStat is the materialized per-thread aggregate stored on the root
+// bottle row: reply count, newest reply timestamp, and newest reply id.
+type ThreadStat struct {
+	Count       int64
+	LastAt      int64
+	LastReplyID string
+}
+
+func (p *PGStore) ThreadStats(ctx context.Context, rootIDs []string) (map[string]ThreadStat, error) {
+	out := make(map[string]ThreadStat, len(rootIDs))
 	if len(rootIDs) == 0 {
 		return out, nil
 	}
 	rows, err := p.pool.Query(ctx, `
-SELECT id, thread_replies, thread_last_at FROM bottles WHERE id = ANY($1::text[])`, rootIDs)
+SELECT id, thread_replies, thread_last_at, thread_last_reply_id FROM bottles WHERE id = ANY($1::text[])`, rootIDs)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var id string
-		var count, last int64
-		if err := rows.Scan(&id, &count, &last); err != nil {
+		var st ThreadStat
+		if err := rows.Scan(&id, &st.Count, &st.LastAt, &st.LastReplyID); err != nil {
 			return nil, err
 		}
-		out[id] = [2]int64{count, last}
+		out[id] = st
 	}
 	return out, rows.Err()
 }

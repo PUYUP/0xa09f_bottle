@@ -83,6 +83,17 @@ export interface ThreadRecord {
   // id of the newest reply bottle seen in this record's subtree — used to
   // scroll+highlight the latest reply when a thread is opened.
   lastReplyId?: string;
+  // Denormalized clone of the newest reply in this thread — id, receiving
+  // kid, text preview, authorship and timestamp — so the list can render
+  // last-message content without walking the subtree. Local IndexedDB
+  // only; the server never sees plaintext.
+  latestReply?: {
+    id: string;
+    kid?: string;
+    text: string;
+    sent: boolean;
+    at: number;
+  };
   // timestamp of the newest reply NOT authored by us — drives the unread
   // badge so our own replies never mark a thread as new.
   lastInboundAt?: number;

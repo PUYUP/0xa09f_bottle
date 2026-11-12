@@ -652,6 +652,7 @@ async function storeSentRecord(
     caughtAt: Date.now(),
     repliesSeenAt: Date.now(),
   }).catch(() => {});
+  await noteReplyPreview(bottle, plain, true, kid);
 }
 
 // dismissEatenBait clears a consumed bait from the bait line: marks any
@@ -772,8 +773,11 @@ export async function fetchThreadBottles(rootId: string, token: string, limit = 
 async function fetchThreadStats(
   roots: string[],
   token: string
-): Promise<Record<string, { count: number; lastAt: number }>> {
-  const res = await api<{ stats?: Record<string, { count: number; lastAt: number }>; now?: number }>(
+): Promise<Record<string, { count: number; lastAt: number; lastReplyId?: string }>> {
+  const res = await api<{
+    stats?: Record<string, { count: number; lastAt: number; lastReplyId?: string }>;
+    now?: number;
+  }>(
     `/api/threads/stats?roots=${encodeURIComponent(roots.join(","))}&token=${encodeURIComponent(token)}`,
     { auth: false }
   );
@@ -1152,6 +1156,7 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
           lastChildAt: prev?.lastChildAt,
           childCount: prev?.childCount,
         }).catch(() => {});
+        await noteReplyPreview(bottle, plain, true, envelope.kid ?? undefined);
         caughtThisSession.add(bottle.id);
         return true;
       }
@@ -1173,6 +1178,7 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         readAt: remoteRead,
         repliesSeenAt: remoteRead,
       }).catch(() => {});
+      await noteReplyPreview(bottle, plain, false, envelope.kid ?? undefined);
       // note: reply keys are NOT burned at max depth — reply:<parentId>
       // decrypts every reply addressed to that parent (all same depth),
       // so sibling replies may still need it.
@@ -1189,6 +1195,49 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
     }
   }
   return false;
+}
+
+// noteReplyPreview denormalizes the newest decrypted reply onto the thread
+// root's local records so the list can render a last-message preview
+// without walking the subtree. Only replies (parentId set) count; older
+// bottles never overwrite a newer preview.
+async function noteReplyPreview(bottle: Bottle, plain: Plain | null, own: boolean, kid?: string) {
+  if (!bottle.parentId || !plain?.text) return;
+  const ts = bottle.createdAt || 0;
+  if (!ts) return;
+  const roots = new Set<string>();
+  if (bottle.rootId) {
+    roots.add(bottle.rootId);
+  } else {
+    // Legacy reply without rootId: bounded parent walk, same as
+    // bumpThreadActivity.
+    let cur = bottle.parentId;
+    for (let hops = 0; cur && hops < 25; hops++) {
+      let next = "";
+      for (const prefix of ["caught:", "sent:"]) {
+        const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${cur}`).catch(() => null);
+        if (rec?.bottle?.rootId) {
+          roots.add(rec.bottle.rootId);
+          next = "";
+          break;
+        }
+        if (rec?.bottle?.parentId) next = rec.bottle.parentId;
+      }
+      if (!next) break;
+      cur = next;
+    }
+  }
+  const text = plain.text.slice(0, 280);
+  for (const rid of roots) {
+    for (const prefix of ["caught:", "sent:"]) {
+      const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${rid}`).catch(() => null);
+      if (!rec) continue;
+      if ((rec.threadLastAt || 0) > ts || (rec.latestReply?.at || 0) >= ts) continue;
+      rec.lastReplyId = bottle.id;
+      rec.latestReply = { id: bottle.id, kid, text, sent: own, at: ts };
+      await idbPut(META_STORE, rec).catch(() => {});
+    }
+  }
 }
 
 // bumpThreadActivity propagates a bottle's activity timestamp to its parent
@@ -1316,7 +1365,7 @@ async function fetchThreadInto(threadRoot: string) {
 
 // applyThreadStatsRoot writes server thread aggregates onto the root
 // bottle's local records (caught:/sent:) — same targets as applyBottleStats.
-async function applyThreadStatsRoot(rootId: string, count: number, lastAt: number) {
+async function applyThreadStatsRoot(rootId: string, count: number, lastAt: number, replyId = "") {
   for (const prefix of ["caught:", "sent:"]) {
     const rec = await idbGet<ThreadRecord>(META_STORE, `${prefix}${rootId}`).catch(() => null);
     if (!rec) continue;
@@ -1327,6 +1376,12 @@ async function applyThreadStatsRoot(rootId: string, count: number, lastAt: numbe
     }
     if (lastAt > 0 && rec.threadLastAt !== lastAt) {
       rec.threadLastAt = lastAt;
+      dirty = true;
+    }
+    // Server-side materialized latest-reply id — kept even when the reply
+    // itself isn't decryptable locally yet.
+    if (replyId && rec.lastReplyId !== replyId) {
+      rec.lastReplyId = replyId;
       dirty = true;
     }
     if (dirty) await idbPut(META_STORE, rec).catch(() => {});
@@ -1394,7 +1449,7 @@ export async function refreshThreadActivity(force = false) {
   for (const root of list) {
     const st = stats[root];
     if (!st) continue;
-    await applyThreadStatsRoot(root, st.count, st.lastAt);
+    await applyThreadStatsRoot(root, st.count, st.lastAt, st.lastReplyId || "");
     if (st.lastAt > (lastAtByRoot.get(root) || 0)) changed.push(root);
   }
   if (changed.length) console.log("[activity] threads changed:", changed.map((id) => id.slice(0, 8)));
