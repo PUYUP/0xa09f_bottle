@@ -1072,7 +1072,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                   onClick={openBaitDialog}
                   title="throw more bait"
                 >
-                  + throw
+                  🪝 throw
                 </button>
 
               </span>
@@ -1087,17 +1087,6 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                   loadThread(bottleId);
                   setDetailPath([bottleId]);
                 }}
-                extra={
-                  <button
-                    type="button"
-                    className="bait-slot bait-new"
-                    title="throw more bait — publish a fresh keypair into the pool"
-                    onClick={openBaitDialog}
-                  >
-                    <span className="bait-emoji">🎣</span>
-                    <span className="bait-status">+ throw</span>
-                  </button>
-                }
               />
             </div>
           </div>
