@@ -676,6 +676,7 @@ async function storeSentRecord(
   plain: Plain,
   kid: string
 ): Promise<void> {
+  ownBottleIds.add(bottleId);
   await idbPut(META_STORE, {
     id: `sent:${bottleId}`,
     bottle,
@@ -821,6 +822,10 @@ async function fetchThreadStats(
 }
 
 const caughtThisSession = new Set<string>();
+// Bottle ids we authored — cast or reply — tracked from the moment the
+// server accepts them (and re-learned from sent: records) so SSE events
+// for our own bottles don't trigger the "something bit" toast/chime.
+const ownBottleIds = new Set<string>();
 
 // catchKidsParam builds the kid set for the inbox scan and SSE subscription:
 // deposited pool keys + self:<userId> (own sent bottles). Reply kids are
@@ -1249,6 +1254,7 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         }).catch(() => {});
         await noteReplyPreview(bottle, plain, true, envelope.kid ?? undefined);
         caughtThisSession.add(bottle.id);
+        ownBottleIds.add(bottle.id);
         return true;
       }
       const { token: pickupToken } = await derivePickupProof(rawSession, bottle.id, envelope.kid || "");
@@ -1827,7 +1833,7 @@ export async function connectEvents() {
         console.log("[sse] device revoked — wiping local data");
         void logout().catch(() => window.location.reload());
       });
-      es.addEventListener("bottle", (ev) => {
+      es.addEventListener("bottle", async (ev) => {
         // Payload is {"id","deleted","parentId","rootId"}; deletions mark
         // local records as placeholders instead of waiting for a scan
         // that may never surface the tombstone incrementally.
@@ -1844,14 +1850,19 @@ export async function connectEvents() {
           }
           console.log("[sse] bottle event", data.id?.slice(0, 8));
           if (data.id) {
-            // Chime only for inbound bottles — our own casts also carry a
-            // self:<us> envelope, so the event fires for them too. A
-            // sent:<id> record means we authored it.
-            void idbGet<ThreadRecord>(META_STORE, `sent:${data.id}`)
-              .then((own) => {
-                if (!own) playNotifySound();
-              })
-              .catch(() => {});
+            // Chime + toast only for inbound bottles — our own casts and
+            // replies also emit events (self:<us> envelope). ownBottleIds
+            // covers bottles authored this session; the sent: record check
+            // covers ones recovered from the server/archive envelope.
+            const own =
+              ownBottleIds.has(data.id) ||
+              (await idbGet<ThreadRecord>(META_STORE, `sent:${data.id}`)
+                .then((rec) => !!rec)
+                .catch(() => false));
+            if (!own) {
+              playNotifySound();
+              setState({ lastCatchAt: Date.now() });
+            }
             // Replies carry rootId; a root bottle's own id is the thread
             // root. Either way fetch that thread directly — an open chat
             // updates without waiting for the stats poll.
@@ -1861,7 +1872,6 @@ export async function connectEvents() {
         } catch {
           // fall through to scan
         }
-        setState({ lastCatchAt: Date.now() });
         scheduleCatchScan();
         scheduleActivityRefresh();
       });
@@ -2178,6 +2188,7 @@ export async function importVaultFile(file: File) {
   popTokens.clear();
   sharedBitsCache.clear();
   caughtThisSession.clear();
+  ownBottleIds.clear();
   profileSynced = false;
   syncPulled = false;
   syncReadAt.clear();

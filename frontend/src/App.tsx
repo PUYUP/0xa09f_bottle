@@ -649,7 +649,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
 
       {catchToast && (
         <div
-          className="bevel fixed bottom-4 left-1/2 z-50 w-[24rem] max-w-[90vw] cursor-pointer"
+          className="bevel fixed bottom-4 left-1/2 z-50 w-[24rem] max-w-[92vw] -translate-x-1/2 cursor-pointer"
           onClick={() => {
             setCatchToast(false);
             run(checkBottles);
