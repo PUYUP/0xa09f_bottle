@@ -729,6 +729,10 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             // List shows badge only — reply counts live inside the thread
             // detail, so no need to track locally-readable descendants here.
             const isSent = r.rec.claim?.status === "SENT";
+            // "(yours)" only when we authored the thread ROOT — an orphaned
+            // reply surfacing as a root (missing parent record) must not
+            // claim the whole thread as ours.
+            const isSentRoot = isSent && !r.rec.bottle?.parentId;
             const bottleId = r.rec.bottle?.id || "";
             // Badge: thread-level reply activity (any depth, via rootId)
             // newer than what we've opened. Show it when we participate in
@@ -801,7 +805,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
                   <b>🎣 {bottleId.slice(0, 8)}</b>
                   {" · "}
                   {r.rec.claim?.status || "CLAIMED"} · {r.rec.claim?.deliveries ?? "?"}/{r.rec.bottle?.maxDeliveries}
-                  {isSent && " · (yours)"}
+                  {isSentRoot && " · (yours)"}
                   {hasNewReplies && (
                     <span className="ml-1 rounded-sm bg-red-600 px-1 font-bold text-white">
                       ● new

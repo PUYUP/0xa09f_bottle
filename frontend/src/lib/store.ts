@@ -1841,9 +1841,18 @@ export async function buildThreads(): Promise<ThreadBundle> {
     if (pid && byId.has(pid)) {
       if (!childrenOf.has(pid)) childrenOf.set(pid, []);
       childrenOf.get(pid)!.push(r);
-    } else {
-      roots.push(r);
+      continue;
     }
+    // Orphaned reply: direct parent isn't stored locally (root not fetched
+    // yet, expired, or deleted). Attach to the thread root via rootId so
+    // our own replies don't surface as standalone "(yours)" threads.
+    const rid = r.bottle!.rootId;
+    if (rid && rid !== r.bottle!.id && byId.has(rid)) {
+      if (!childrenOf.has(rid)) childrenOf.set(rid, []);
+      childrenOf.get(rid)!.push(r);
+      continue;
+    }
+    roots.push(r);
   }
   for (const r of unique) caughtThisSession.add(r.bottle!.id);
   const sentIds = new Set(recs.filter(isSentRecord).map((r) => r.bottle!.id));
@@ -2126,7 +2135,13 @@ export async function importVaultFile(file: File) {
   // The owner demonstrably returned — they hold the private keys. Re-cast
   // anything the pool no longer holds (released on logout, or TTL-expired)
   // so imported bait doesn't sit dry on the shore.
-  await depositUndeposited("86400").catch(() => {});
+  const redeposited = await depositUndeposited("86400").catch((e) => {
+    log(`bait re-deposit failed: ${(e as Error).message}`, "warn");
+    return 0;
+  });
+  if (redeposited === 0 && state.keys.length) {
+    log(`no bait re-deposited — ${state.keys.length} key(s) on record`, "warn");
+  }
   await renderInbox();
   // A v4 secret key carries key material only — messages live on the
   // server. Pull them now: inbox scan recreates sent:/caught: records,
