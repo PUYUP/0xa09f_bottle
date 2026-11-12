@@ -794,7 +794,7 @@ function lastReplyable(root: ThreadNode): ThreadNode | null {
             return (
               <div
                 key={r.rec.id}
-                className={`msg bevel-in clickable${isSent ? " sent" : ""}`}
+                className={`msg bevel-in clickable${isSentRoot ? " sent" : ""}`}
                 onClick={() => {
                   if (!bottleId) return;
                   loadThread(bottleId);
