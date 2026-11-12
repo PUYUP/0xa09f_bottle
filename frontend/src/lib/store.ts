@@ -831,7 +831,19 @@ async function eventKidsParam(): Promise<string> {
 // whose key doesn't match — the parent's plaintext embeds the reply
 // pubkey replies are wrapped to, so candidates are ordered by whose
 // public half (x/y) matches it.
+// replyCandCache memoizes replyPrivateJwkCandidates per (identity key,
+// kid): popTokenFor calls it for every reply kid on every token round and
+// each miss costs an HKDF + P-256 derivation plus two IndexedDB reads.
+const replyCandCache = new Map<string, { d: string; cands: JWK[] }>();
+
 async function replyPrivateJwkCandidates(kid: string): Promise<JWK[]> {
+  const cacheKey = kid;
+  const idtForCache = await getIdentity().catch(() => null);
+  const cacheD = idtForCache?.privateJwk?.d;
+  if (cacheD) {
+    const hit = replyCandCache.get(cacheKey);
+    if (hit && hit.d === cacheD) return hit.cands;
+  }
   const parentId = kid.slice(REPLY_PREFIX.length);
   const out: JWK[] = [];
   const seen = new Set<string>();
@@ -841,7 +853,7 @@ async function replyPrivateJwkCandidates(kid: string): Promise<JWK[]> {
       out.push(j);
     }
   };
-  const idt = await getIdentity().catch(() => null);
+  const idt = idtForCache;
   if (idt?.privateJwk && parentId) {
     try {
       push((await deriveReplyKeyPair(idt.privateJwk, parentId)).privateJwk);
@@ -866,7 +878,11 @@ async function replyPrivateJwkCandidates(kid: string): Promise<JWK[]> {
         Number(b.x === target.x && b.y === target.y) - Number(a.x === target.x && a.y === target.y)
     );
   } else {
-    log(`reply keys ${kid.slice(0, 24)}: ${out.length} candidates, no parent reply pubkey`, "warn");
+    log(`reply keys ${kid.slice(0, 24)}: ${out.length} candidates, no parent reply pubkey`);
+  }
+  if (cacheD && out.length) {
+    if (replyCandCache.size > 4096) replyCandCache.clear();
+    replyCandCache.set(cacheKey, { d: cacheD, cands: out });
   }
   return out;
 }
@@ -1062,6 +1078,32 @@ async function applyBottleStats(bottle: Bottle) {
   }
 }
 
+// ourUserId caches deriveUserId(identity.publicJwk), keyed by the key
+// itself so an identity switch (import/logout) never serves a stale uid.
+let ourUidCache: { x: string; uid: string } | null = null;
+async function ourUserId(): Promise<string> {
+  const idt = await getIdentity().catch(() => null);
+  const x = idt?.publicJwk?.x;
+  if (!x) return "";
+  if (ourUidCache?.x === x) return ourUidCache.uid;
+  const uid = await deriveUserId(idt!.publicJwk).catch(() => "");
+  ourUidCache = { x, uid };
+  return uid;
+}
+
+// TERMINAL_CLAIM_ERRORS are pickup failures that can never heal by
+// retrying — the bottle is already delivered/exhausted/gone or our proof
+// is definitively wrong. We still store the decrypted record; we just
+// stop re-claiming it on every scan.
+const TERMINAL_CLAIM_ERRORS = new Set([
+  "already_delivered",
+  "not_active",
+  "exhausted",
+  "not_found",
+  "unknown_key",
+  "invalid_token",
+]);
+
 // processBottle tries every envelope of a fetched bottle against our local
 // keys and stores the first successful decryption as a caught:/sent:
 // record. Returns true when a new record was written this session.
@@ -1093,8 +1135,18 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
     }
     return false;
   }
+  let ourUid = "";
   for (const envelope of bottle.envelopes || []) {
-    const isSelf = typeof envelope.kid === "string" && envelope.kid.startsWith(SELF_PREFIX);
+    const envKid = typeof envelope.kid === "string" ? envelope.kid : "";
+    // self:<uid> archive envelopes belong to that uid alone. Multi-recipient
+    // bottles carry other users' self: envelopes — they can never unwrap
+    // with our key, so skip them before spending an ECDH attempt (and a
+    // warn line) on them.
+    if (envKid.startsWith(SELF_PREFIX)) {
+      if (!ourUid) ourUid = await ourUserId();
+      if (ourUid && envKid.slice(SELF_PREFIX.length) !== ourUid) continue;
+    }
+    const isSelf = envKid.startsWith(SELF_PREFIX);
     // Private-key candidates for this envelope, best first. Reply kids can
     // have both a deterministic key and a stale stored one — try each
     // until the wrap actually unwraps.
@@ -1102,20 +1154,15 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
     if (isSelf) {
       const id = await getIdentity().catch(() => null);
       if (id?.privateJwk) privJwks = [id.privateJwk];
-    } else if (typeof envelope.kid === "string" && envelope.kid) {
-      if (envelope.kid.startsWith(REPLY_PREFIX)) {
-        privJwks = await replyPrivateJwkCandidates(envelope.kid);
+    } else if (envKid) {
+      if (envKid.startsWith(REPLY_PREFIX)) {
+        privJwks = await replyPrivateJwkCandidates(envKid);
       } else {
-        const rec = byKid.get(envelope.kid);
+        const rec = byKid.get(envKid);
         if (rec?.privateJwk) privJwks = [rec.privateJwk];
       }
     }
-    if (!privJwks.length) {
-      if (envelope.kid) {
-        log(`decrypt skip ${bottle.id.slice(0, 8)}: no key for kid=${envelope.kid.slice(0, 40)}`, "warn");
-      }
-      continue;
-    }
+    if (!privJwks.length) continue;
     try {
       let rawSession: ArrayBuffer | null = null;
       let plain: Plain | null = null;
@@ -1131,10 +1178,21 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         }
       }
       if (!rawSession || !plain) {
-        log(
-          `decrypt fail ${bottle.id.slice(0, 8)}: kid=${envelope.kid ?? "?"} tried=${privJwks.length} keys depth=${bottle.depth}`,
-          "warn"
-        );
+        // reply:<parentId> kids are shared across users — a failed unwrap is
+        // expected for replies addressed to someone else's parent. Only warn
+        // when the parent is provably ours: sent: records are created
+        // optimistically at compose time, so they cover every authored bottle.
+        let severe = true;
+        if (envKid.startsWith(REPLY_PREFIX)) {
+          const parentId = envKid.slice(REPLY_PREFIX.length);
+          severe = !!(await idbGet<ThreadRecord>(META_STORE, `sent:${parentId}`).catch(() => null));
+        }
+        if (severe) {
+          log(
+            `decrypt fail ${bottle.id.slice(0, 8)}: kid=${envelope.kid ?? "?"} tried=${privJwks.length} keys depth=${bottle.depth}`,
+            "warn"
+          );
+        }
         continue;
       }
       if (isSelf) {
@@ -1166,6 +1224,12 @@ async function processBottle(bottle: Bottle, byKid: Map<string, KeyRecord>): Pro
         claim = await claimBottle(bottle.id, envelope.kid || "", pickupToken);
       } catch (e) {
         claim = { ok: false, error: (e as Error).message };
+      }
+      // Terminal pickup failures can never heal by retrying — mark the claim
+      // satisfied (keeping the real status visible) so the next scan skips
+      // this bottle instead of re-decrypting and re-claiming it forever.
+      if (claim?.ok === false && TERMINAL_CLAIM_ERRORS.has(claim.error || "")) {
+        claim = { ...claim, ok: true, status: claim.status ?? claim.error };
       }
       const remoteRead = syncReadAt.get(`caught:${bottle.id}`);
       await idbPut(META_STORE, {
